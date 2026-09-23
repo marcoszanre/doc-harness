@@ -38,17 +38,18 @@ class ReadingApp(App):
     Screen { background: #0a1122; color: #e5edff; }
     Header { background: #12294e; color: #f1f6ff; }
     Footer { background: #12294e; }
-    #workspace-panel { width: 34%; min-width: 30; border: round #3971bc; background: #101d35; padding: 1 2; }
-    #main-panel { width: 1fr; padding: 0 1; }
+    #shell { height: 1fr; min-height: 0; overflow: hidden; }
+    #workspace-panel { width: 34%; min-width: 30; height: 100%; border: round #3971bc; background: #101d35; padding: 1 2; }
+    #main-panel { width: 1fr; height: 100%; padding: 0 1 3 1; overflow: hidden; }
     .label { color: #77aef8; text-style: bold; margin-top: 1; }
     .info { color: #e4eeff; }
     #sources { height: 1fr; overflow-y: auto; }
     #tasks { height: 9; overflow-y: auto; }
-    #activity { height: 35%; border: round #3971bc; background: #101d35; padding: 0 1; }
-    #thinking { height: 19%; border: round #725da8; background: #161b36; padding: 0 1; overflow-y: auto; }
-    #live-answer { height: 18%; border: round #3971bc; background: #101d35; padding: 0 1; overflow-y: auto; }
-    #conversation { height: 1fr; border: round #3971bc; background: #101d35; padding: 0 1; }
-    #composer-row { height: 3; }
+    #activity { height: 1fr; min-height: 4; border: round #3971bc; background: #101d35; padding: 0 1; }
+    #thinking { height: 1fr; min-height: 4; border: round #725da8; background: #161b36; padding: 0 1; overflow-y: auto; }
+    #live-answer { height: 1fr; min-height: 4; border: round #3971bc; background: #101d35; padding: 0 1; overflow-y: auto; }
+    #conversation { height: 2fr; min-height: 5; border: round #3971bc; background: #101d35; padding: 0 1; }
+    #composer-row { dock: bottom; height: 3; }
     #composer { width: 1fr; background: #182945; border: round #4d91ee; color: #ffffff; }
     #stop { width: 12; margin-left: 1; background: #8e3a55; color: #ffffff; }
     #progress { height: 1; margin: 1 0; }
@@ -70,7 +71,7 @@ class ReadingApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        with Horizontal():
+        with Horizontal(id="shell"):
             with Vertical(id="workspace-panel"):
                 yield Static("WORKSPACE", classes="label")
                 yield Static(id="location", classes="info")

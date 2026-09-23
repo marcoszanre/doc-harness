@@ -20,6 +20,20 @@ class FakeFoundry:
 
 
 class TuiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_composer_is_visible_focused_and_receives_keystrokes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for size in ((120, 40), (90, 28)):
+                with self.subTest(size=size):
+                    app = ReadingApp(Path(directory) / f"weekly-{size[0]}")
+                    async with app.run_test(size=size) as pilot:
+                        await pilot.pause()
+                        composer = app.query_one("#composer", Input)
+                        self.assertGreaterEqual(composer.region.y, 1)
+                        self.assertLessEqual(composer.region.bottom, app.size.height - 1)
+                        self.assertIs(app.focused, composer)
+                        await pilot.press("a")
+                        self.assertEqual(composer.value, "a")
+
     async def test_raw_ui_accepts_workspace_commands(self):
         with tempfile.TemporaryDirectory() as directory:
             app = ReadingApp(Path(directory) / "weekly")
