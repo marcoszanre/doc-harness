@@ -101,6 +101,44 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(app.query_one("#workspace-choice").display)
                 self.assertIn(str(suggested.resolve()), str(app.query_one("#workspace-path", Static).render()))
 
+    async def test_help_skills_and_clear_work_before_choosing_a_folder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            suggested = Path(directory) / "weekly"
+            app = ReadingApp(None, suggested_root=suggested)
+            async with app.run_test(size=(100, 32)) as pilot:
+                await pilot.pause()
+                composer = app.query_one("#composer", Input)
+                composer.value = "/commands"
+                await pilot.press("enter")
+                composer.value = "/skills"
+                await pilot.press("enter")
+                await pilot.pause()
+                transcript = app.query_one("#thread", Vertical)
+                roles = [str(item.render()) for item in transcript.query(".role")]
+                self.assertTrue(any("Advanced Commands" in role for role in roles))
+                self.assertTrue(any("Skills" in role for role in roles))
+                composer.value = "/clear"
+                await pilot.press("enter")
+                await pilot.pause()
+                self.assertEqual(len(transcript.children), 0)
+                self.assertIsNone(app.workspace)
+                self.assertFalse(suggested.exists())
+
+    async def test_clear_resets_chat_context_without_removing_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = ReadingApp(Path(directory) / "weekly")
+            app.workspace.add_url("https://example.org/article")
+            app.workspace.state["chat"] = [{"role": "user", "content": "old question"}]
+            app.workspace.save()
+            async with app.run_test(size=(100, 32)) as pilot:
+                await pilot.pause()
+                app.query_one("#composer", Input).value = "/clear"
+                await pilot.press("enter")
+                await pilot.pause()
+                self.assertFalse(app.workspace.state["chat"])
+                self.assertEqual(len(app.workspace.sources()), 1)
+                self.assertEqual(len(app.query_one("#thread", Vertical).children), 0)
+
     async def test_new_folder_is_initialized_at_the_exact_selected_path(self):
         with tempfile.TemporaryDirectory() as directory:
             selected = Path(directory) / "my new folder"

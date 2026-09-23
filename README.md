@@ -74,8 +74,11 @@ settings**. **Ctrl+J** or the **New line** button work when the terminal
 cannot distinguish the modified key. The footer reports input and output
 tokens supplied by Foundry, not estimated cost.
 
-For expert shortcuts, use `/skills` or F1. `/restart` (Ctrl+R) returns to
-the folder chooser **without deleting your files**. `/search QUERY` suggests
+For expert shortcuts, use `/skills` or F1; both `/skills` and `/commands`
+work even before selecting a folder. `/clear` clears the chat view and
+conversational context **without deleting sources or approved drafts**.
+`/restart` (Ctrl+R) returns to the folder chooser **without deleting your
+files**. `/search QUERY` suggests
 public links through Tavily; adding one still requires your `/pick N` approval
 and a `TAVILY_API_KEY` environment variable.
 

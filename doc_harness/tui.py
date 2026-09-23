@@ -38,7 +38,8 @@ HELP = (
     "   Paste several lines, or use Ctrl/Cmd+Enter or the New line button.\n"
     "2. Choose a format. Use BUILD -> PREVIEW -> EXPORT.\n"
     "You can also say 'make a PDF', 'use folder C:\\my-reading', or 'change the summary ...'.\n"
-    "Type / for autocomplete, or /skills for expert shortcuts. /commands lists every command."
+    "Type / for autocomplete, /skills for expert shortcuts, or /clear to reset chat only.\n"
+    "/commands lists every command."
 )
 ADVANCED_HELP = (
     "/new PATH  /open PATH  /add PATH_OR_URL\n"
@@ -46,7 +47,7 @@ ADVANCED_HELP = (
     "/words N  /limit KB|off  /build  /refresh  /preview  /revise FEEDBACK\n"
     "/approve  /reject  /todos  /todo TITLE  /done N\n"
     "/skill collect|compose|review [argument]  /skills\n"
-    "/status  /restart  /cancel (Ctrl+X)  /quit (Ctrl+Q)\n"
+    "/status  /clear  /restart  /cancel (Ctrl+X)  /quit (Ctrl+Q)\n"
     "Any other message goes to the chat assistant. The composer locks while generating."
 )
 
@@ -57,7 +58,7 @@ class ComposerSuggester(Suggester):
         "/format docx", "/format markdown", "/help", "/search ", "/pick ",
         "/refresh", "/revise ", "/new ", "/open ", "/remove ", "/words ",
         "/limit ", "/todo ", "/todos", "/done ", "/skills", "/skill collect ",
-        "/skill compose pdf", "/skill review ", "/commands", "/status", "/restart", "/quit",
+        "/skill compose pdf", "/skill review ", "/commands", "/clear", "/status", "/restart", "/quit",
     )
 
     def __init__(self) -> None:
@@ -723,6 +724,12 @@ class ReadingApp(App):
     def action_help(self) -> None:
         self._chat_log("COMMANDS", HELP)
 
+    def _clear_chat(self) -> None:
+        self.query_one("#thread", Vertical).remove_children()
+        if self.workspace is not None:
+            self.workspace.state["chat"] = []
+            self.workspace.save()
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         try:
             if event.button.id == "use-suggested":
@@ -805,6 +812,12 @@ class ReadingApp(App):
         if lower in {"/help", "/?"}:
             self.action_help()
             return
+        if lower in {"/commands", "/skills", "/clear", "/status"}:
+            self._command(lower, "")
+            return
+        if lower.startswith("/skill "):
+            self._run_skill(value.partition(" ")[2])
+            return
         if lower in {"/quit", "/exit"}:
             self.exit()
             return
@@ -815,6 +828,8 @@ class ReadingApp(App):
             command, _, folder = value.partition(" ")
             self._select_workspace(folder, create=command.lower() == "/new")
             return
+        if lower.startswith("/"):
+            raise ValueError("Unknown command. Try /commands or choose a working folder.")
         folder = re.match(
             r"^(?:use|create|open|switch to|usar|criar|abrir)(?: a| my| uma)? "
             r"(?:folder|workspace|pasta)\s+(.+)$",
@@ -970,6 +985,8 @@ class ReadingApp(App):
             self.action_help()
         elif command == "/commands":
             self._chat_log("ADVANCED COMMANDS", ADVANCED_HELP)
+        elif command == "/clear":
+            self._clear_chat()
         elif command in {"/quit", "/exit"}:
             self.exit()
         elif command == "/restart":
@@ -1031,12 +1048,15 @@ class ReadingApp(App):
         elif command == "/skill":
             self._run_skill(argument)
         elif command == "/status":
-            self._chat_log(
-                "Assistant",
-                self._source_status() + f"\n\nStage: {workspace.state['stage']}."
-                f"\nWorkspace: `{workspace.root}`."
-                f"\nLatest output: `{workspace.state.get('last_output', 'none')}`.",
-            )
+            if workspace is None:
+                self._chat_log("Assistant", f"No working folder selected yet. Suggested: `{self.suggested_root}`.")
+            else:
+                self._chat_log(
+                    "Assistant",
+                    self._source_status() + f"\n\nStage: {workspace.state['stage']}."
+                    f"\nWorkspace: `{workspace.root}`."
+                    f"\nLatest output: `{workspace.state.get('last_output', 'none')}`.",
+                )
         elif command == "/cancel":
             self.action_interrupt()
         else:
