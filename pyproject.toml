@@ -23,3 +23,6 @@ doc-harness = "doc_harness.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["doc_harness*"]
+
+[tool.setuptools.package-data]
+doc_harness = ["skills/*/SKILL.md"]

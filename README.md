@@ -12,9 +12,12 @@ are no templates, browser automation, Google integration, or agent tool loop.
 The only model/provider is **DeepSeek-V4-Pro on Azure Foundry**.
 
 The full-screen Textual interface runs in the terminal's interactive/raw mode;
-it is not a cooked `input()` prompt. It shows sources, tasks, progress, a
-streamed response, and model-provided reasoning *when available*. The composer
-locks during generation; **Ctrl+X** or **STOP** requests an interruption.
+it is not a cooked `input()` prompt. The full-width composer accepts **pasted
+file paths, URLs, or ordinary requests**. A short conversation guides new users
+through the workflow; buttons cover the common actions. The UI also shows
+sources, tasks, progress, a streamed response, and model-provided reasoning
+*when available*. The composer locks during generation; **Ctrl+X** or **STOP**
+requests an interruption.
 
 ## Get started
 
@@ -37,17 +40,21 @@ To choose another folder:
 .\.venv\Scripts\python.exe -m doc_harness --workspace "$HOME\Documents\reading-week"
 ```
 
-Example session inside the TUI:
+Example session inside the TUI — **no commands to memorize**:
 
 ```text
-/add-file C:\Users\you\Downloads\notes.pdf
-/add-url https://example.org/article
-/format pdf
-/words 250
-/build
-/preview
-/approve
+C:\Users\you\Downloads\notes.pdf
+https://example.org/article
+make a PDF
 ```
+
+Paste a path or link and press Enter; each source appears in the workspace.
+Choose PDF from the format selector or say "make a PDF". Use the **BUILD**,
+**PREVIEW**, and **EXPORT** buttons. Say "use folder C:\my-reading" to switch
+working folders, or "change the summary to focus on..." to revise the draft.
+To find additional links, say "find articles about ...", then "add result 1".
+The suggestion in the composer completes slash commands and local paths with
+**Tab** or **Right Arrow**; commands are optional.
 
 The approved file appears in your folder's `output/` directory. Its summary,
 navigation, full article texts, and source references are all in that **one
@@ -87,6 +94,9 @@ deleting your copy.
 
 ## Commands
 
+Press **F1** for a short guided start. The commands below are optional expert
+shortcuts; `/commands` shows the complete list in the UI:
+
 | Purpose | Commands |
 |---|---|
 | Working folders | `/new PATH`, `/open PATH`, `/status` |
@@ -97,9 +107,13 @@ deleting your copy.
 | Manual tasks | `/todo TITLE`, `/todos`, `/done N` |
 | Help / stop | `/help` or **F1**, `/cancel` or **Ctrl+X**, `/quit` or **Ctrl+Q** |
 
-Text without a slash is plain chat with the same Foundry model. Chat has **no
-tools**: it can help plan your reading list but cannot browse, read your
-files, add sources, or export a document.
+Embedded workflow skills are available with `/skills`: `guide`, `collect`,
+`compose`, and `review`. Experts can invoke `/skill collect PATH_OR_URL`,
+`/skill compose pdf|docx|markdown`, or `/skill review preview|approve|FEEDBACK`
+directly. These small `SKILL.md` files describe the setup for each stage;
+they do not add a tool-calling agent loop. Unrecognized free-form requests
+go to plain chat with the same Foundry model, which guides you but does not
+claim it performed an action.
 
 Set `TAVILY_API_KEY` in your environment to enable `/search`; a found link
 enters your folder only after `/pick N`. No key is included in this repository:
@@ -144,8 +158,9 @@ integration test from PowerShell, set `$env:DOC_HARNESS_LIVE = "1"` and run
 Azure login and a deployed model; this makes billed API requests.
 
 The code is organized by workspace, sources, Foundry adapter, workflow,
-exporters, chat, and TUI so it can be read in that order. This project is MIT
-licensed. Do not commit credentials or contents of personal working folders.
+exporters, chat, optional workflow skills, and TUI so it can be read in that
+order. This project is MIT licensed. Do not commit credentials or contents of
+personal working folders.
 
 API references: [Foundry reasoning and streaming](https://learn.microsoft.com/en-us/azure/ai-foundry/model-inference/how-to/use-chat-reasoning),
 [Foundry Chat Completions v1](https://learn.microsoft.com/en-us/azure/foundry/openai/latest),
