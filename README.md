@@ -22,9 +22,14 @@ Paste **several sources at once**, one per line or separated by semicolons.
 Every submitted user message remains visible above the composer; assistant
 replies render Markdown rather than exposing formatting characters.
 The composer **wraps long text** and grows to a maximum of eight terminal
-rows. **Enter sends**; **Ctrl+Enter** on Windows or **Cmd+Enter** on macOS
-inserts a newline. **Shift+Enter** and the **New line** button provide
-alternatives when the terminal does not forward modified Enter keys.
+rows. **Enter sends**; **Shift+Enter** inserts a newline when the terminal
+forwards it distinctly. Windows Terminal may send a legacy `ESC` + `Enter`
+sequence for a custom Shift+Enter binding, which Textual normally reads as
+plain Enter. Doc Harness recognizes that existing binding **only within this
+app**, without editing terminal settings. **Ctrl+J** and the **New line**
+button are reliable alternatives when a terminal cannot distinguish
+Shift+Enter. Ctrl+Enter or Cmd+Enter also work when the terminal forwards
+them distinctly. The footer displays the available shortcut.
 Buttons cover common actions; the composer locks during generation and
 **Ctrl+X** or **Stop** requests an interruption.
 

@@ -64,8 +64,12 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                 composer.value = "https://example.org/one"
                 await pilot.press("ctrl+enter")
                 self.assertEqual(composer.value, "https://example.org/one\n")
-                await pilot.press("super+enter")
+                await pilot.press("ctrl+j")
                 self.assertEqual(composer.value, "https://example.org/one\n\n")
+                await pilot.press("shift+enter")
+                self.assertEqual(composer.value, "https://example.org/one\n\n\n")
+                await pilot.press("super+enter")
+                self.assertEqual(composer.value, "https://example.org/one\n\n\n\n")
                 composer.value = "https://example.org/one"
                 await pilot.press("enter")
                 self.assertEqual(composer.value, "")

@@ -29,6 +29,7 @@ from .foundry import Completion, Foundry
 from .input_parser import extract_sources, only_sources
 from .skills import SKILLS, read_skill
 from .sources import web_search
+from .terminal_keys import enable_shift_enter
 from .workflow import build, revise
 from .workspace import INPUT_SUFFIXES, Workspace
 
@@ -127,7 +128,7 @@ class ComposerInput(TextArea):
             event.prevent_default()
             event.stop()
             self.post_message(self.Submitted(self, self.text))
-        elif event.key in {"ctrl+enter", "super+enter", "meta+enter", "shift+enter", "alt+enter"}:
+        elif event.key in {"ctrl+enter", "ctrl+j", "super+enter", "meta+enter", "shift+enter", "alt+enter"}:
             event.prevent_default()
             event.stop()
             self.insert("\n")
@@ -258,6 +259,16 @@ class ReadingApp(App):
             "markdown.link": "#a9bed8",
             "markdown.link_url": "underline #a9bed8",
         }))
+        try:
+            shift_enter_ready = enable_shift_enter()
+        except (OSError, RuntimeError, ValueError) as error:
+            shift_enter_ready = False
+            self.notify(str(error), severity="warning")
+        self.query_one("#hint", Static).update(
+            "Enter send  |  "
+            + ("Shift+Enter newline  |  " if shift_enter_ready else "Ctrl+J / New line newline  |  ")
+            + "Tab complete  |  F1 help"
+        )
         self.refresh_panels()
         self._guide()
         self.query_one("#composer", ComposerInput).focus()
