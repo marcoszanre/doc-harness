@@ -116,7 +116,7 @@ class ReadingApp(App):
         self.query_one("#sources", Static).update(Text("\n".join(source_lines) if source_lines else "Drop files into inputs/ or use /add-url."))
         settings = workspace.state["settings"]
         self.query_one("#settings", Static).update(Text(
-            f"Format: {settings['format'].upper()}\nWords: ~{settings['target_words']}"
+            f"Format: {settings['format'].upper()}\nSummary: ~{settings['target_words']} words"
             f"\nFile limit: {settings['max_file_kb'] or 'off'} KB\n"
             f"Output: {workspace.output}\nStage: {workspace.state['stage']}"
         ))
@@ -177,9 +177,9 @@ class ReadingApp(App):
             emit = lambda category, text: self.call_from_thread(self._event, category, text)
             if kind in {"build", "refresh"}:
                 result = build(self.workspace, model, emit, self.cancel, refresh=kind == "refresh")
-                summary = f"Draft ready: {result.word_count} words. "
+                summary = f"Full-text collection ready: {result.word_count}-word edition summary. "
                 summary += f"{len(result.issues)} blocker(s); {len(result.warnings)} warning(s). "
-                summary += "Use /preview, /revise FEEDBACK or /approve."
+                summary += "Use /preview, /revise SUMMARY_FEEDBACK or /approve."
                 if result.issues or result.warnings:
                     for item in result.issues + result.warnings:
                         emit("error", item)
@@ -188,7 +188,7 @@ class ReadingApp(App):
                 summary = f"Assistant finished ({len(answer.split())} words)."
             elif kind == "revise":
                 result = revise(self.workspace, model, payload, emit, self.cancel)
-                summary = f"Revision ready: {result.word_count} words, {len(result.issues)} blocker(s), {len(result.warnings)} warning(s)."
+                summary = f"Summary revision ready: {result.word_count} words, {len(result.issues)} blocker(s), {len(result.warnings)} warning(s)."
                 for item in result.issues + result.warnings:
                     emit("error", item)
             elif kind == "search":

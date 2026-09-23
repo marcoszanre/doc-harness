@@ -30,7 +30,6 @@ class SourceTests(unittest.TestCase):
             (workspace.inputs / "empty.txt").write_text("", encoding="utf-8")
             (workspace.inputs / "ok.md").write_text("# Weekly\nA useful story.", encoding="utf-8")
             events = []
-            sources, errors = index_sources(workspace, lambda *args: events.append(args), Event())
-            self.assertEqual(len(sources), 1)
-            self.assertEqual(len(errors), 1)
-            self.assertIn("empty.txt", errors[0])
+            with self.assertRaisesRegex(ValueError, "Every source is required"):
+                index_sources(workspace, lambda *args: events.append(args), Event())
+            self.assertIn("empty.txt", str(events))

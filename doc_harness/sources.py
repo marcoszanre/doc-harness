@@ -26,8 +26,7 @@ from pypdf.errors import PdfReadError
 from .workspace import Workspace
 
 MAX_DOWNLOAD = 2_000_000
-MAX_SOURCE_CHARS = 12_000
-MAX_CONTEXT_CHARS = 100_000
+MAX_EXTRACTED_CHARS = 2_000_000
 HEADERS = {"User-Agent": "DocHarness/0.1 (weekly reading list)", "Accept": "text/html,text/plain,text/markdown,application/pdf"}
 
 
@@ -127,18 +126,27 @@ def read_file(path: Path) -> str:
         raise ValueError("Local file exceeds the 8 MB per-file limit.")
     suffix = path.suffix.lower()
     if suffix == ".pdf":
-        text = "\n\n".join(page.extract_text() or "" for page in PdfReader(path).pages[:60])
+        pages = PdfReader(path).pages
+        text = "\n\n".join(page.extract_text() or "" for page in pages)
     elif suffix == ".docx":
         with zipfile.ZipFile(path) as archive:
             if sum(item.file_size for item in archive.infolist()) > 25_000_000:
                 raise ValueError("Expanded Word document exceeds the 25 MB limit.")
-        text = "\n\n".join(p.text for p in Document(path).paragraphs)
+        blocks = []
+        for block in Document(path).iter_inner_content():
+            if hasattr(block, "rows"):
+                blocks.extend(" | ".join(cell.text for cell in row.cells) for row in block.rows)
+            else:
+                blocks.append(block.text)
+        text = "\n\n".join(blocks)
     else:
         text = path.read_text(encoding="utf-8-sig")
         if suffix in {".html", ".htm"}:
             text = html_to_markdown(text)
     if not text.strip():
         raise ValueError("No selectable text found; OCR is not included.")
+    if len(text) > MAX_EXTRACTED_CHARS:
+        raise ValueError("Extracted text exceeds the 2 million character per-source limit.")
     return text
 
 
@@ -178,7 +186,6 @@ def index_sources(workspace: Workspace, emit, cancel: Event, refresh: bool = Fal
         raise ValueError("Add a file or URL before building a reading list.")
     indexed: list[IndexedSource] = []
     errors: list[str] = []
-    remaining = MAX_CONTEXT_CHARS
     for number, item in enumerate(sources, 1):
         if cancel.is_set():
             raise InterruptedError("Indexing was interrupted.")
@@ -199,18 +206,18 @@ def index_sources(workspace: Workspace, emit, cancel: Event, refresh: bool = Fal
                         raise ValueError("No readable text found.")
                     from .workspace import atomic_text
 
-                    atomic_text(cache, text[:MAX_SOURCE_CHARS])
+                    if len(text) > MAX_EXTRACTED_CHARS:
+                        raise ValueError("Extracted text exceeds the 2 million character per-source limit.")
+                    atomic_text(cache, text)
                 reference = url
             if not text.strip():
                 raise ValueError("No readable text found.")
-            if remaining <= 0:
-                raise ValueError("The 100,000-character context budget has been reached.")
-            content = text[: min(MAX_SOURCE_CHARS, remaining)]
-            remaining -= len(content)
-            indexed.append(IndexedSource(label, reference, content))
+            if len(text) > MAX_EXTRACTED_CHARS:
+                raise ValueError("Extracted text exceeds the 2 million character per-source limit.")
+            indexed.append(IndexedSource(label, reference, text))
         except (ValueError, OSError, RuntimeError, PdfReadError, PackageNotFoundError) as error:
             errors.append(f"{label}: {error}")
             emit("error", errors[-1])
-    if not indexed:
-        raise ValueError("All sources failed to index: " + "; ".join(errors))
+    if errors:
+        raise ValueError("Every source is required; fix these extraction errors: " + "; ".join(errors))
     return indexed, errors

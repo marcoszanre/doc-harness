@@ -59,7 +59,7 @@ class Workspace:
                     "sources": [],
                     "todos": [],
                     "chat": [],
-                    "settings": {"format": "markdown", "target_words": 900, "max_file_kb": None},
+                    "settings": {"format": "markdown", "target_words": 250, "max_file_kb": None},
                     "stage": "Ready",
                 },
                 indent=2,
@@ -145,8 +145,8 @@ class Workspace:
         self.save()
 
     def set_target_words(self, value: int) -> None:
-        if not 200 <= value <= 8_000:
-            raise ValueError("Target length must be between 200 and 8,000 words.")
+        if not 100 <= value <= 2_000:
+            raise ValueError("Edition summary must be between 100 and 2,000 words.")
         self.state["settings"]["target_words"] = value
         self.invalidate()
         self.save()

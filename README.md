@@ -1,10 +1,13 @@
 # Doc Harness
 
-**Your week of reading, distilled into one document.**
+**Your week of reading, together in one navigable document.**
 
 Doc Harness is a small Python learning project: collect local notes and public
-articles in a working folder, ask an Azure Foundry model to synthesize a weekly
-reading list, review the result, and export **Markdown, PDF, or DOCX**. There
+articles in a working folder, ask an Azure Foundry model to write an **edition
+summary**, then assemble the **complete extracted text of every source** into
+one Markdown, PDF, or DOCX file. A hyperlinked table of contents navigates
+to each article *inside the final file*. An original-sources section at the
+end links to external URLs and identifies local input files. There
 are no templates, browser automation, Google integration, or agent tool loop.
 The only model/provider is **DeepSeek-V4-Pro on Azure Foundry**.
 
@@ -40,18 +43,23 @@ Example session inside the TUI:
 /add-file C:\Users\you\Downloads\notes.pdf
 /add-url https://example.org/article
 /format pdf
-/words 800
+/words 250
 /build
 /preview
 /approve
 ```
 
-The approved file appears in your folder's `output/` directory. Choose
+The approved file appears in your folder's `output/` directory. Its summary,
+navigation, full article texts, and source references are all in that **one
+file**, not separate exports or a list of links. Choose
 `/format markdown` or `/format docx` instead for the other outputs. `/build`
-indexes your sources and drafts the document; `/preview` shows it; `/revise
-Make the takeaways shorter` requests a revision; `/approve` exports only after
-your review. Missing or invented citation numbers block export. Other
-quality warnings, such as length outside +/- 25% of your target, need your
+indexes your sources and drafts the collection; `/preview` shows it; `/revise
+Make the summary shorter` revises **only the edition summary**, never the
+article texts; `/approve` exports after review. `/words` targets only the
+summary, **not** the total document length. A smaller `/limit KB` cannot
+silently shorten sources: export stops with an explicit size error instead.
+Missing or invented citations in the summary block export. Other quality
+warnings, such as summary length outside +/- 25% of your target, require
 explicit approval.
 
 ## What's in a working folder?
@@ -59,18 +67,23 @@ explicit approval.
 ```text
 reading-week/
   inputs/             copied files or files you drop in directly
-  cache/              downloaded text and the reviewable draft.md
+  cache/              complete extracted text, source snapshots, and reviewable draft.md
   output/             approved reading-list-YYYY-MM-DD.md/pdf/docx
   .doc-harness.json   settings, source links, chat, tasks, and stage
 ```
 
 Supported input files: UTF-8 `.md`, `.txt`, `.html`, text-based `.pdf`, and
-`.docx`. Image-only PDFs need OCR outside this project. Public HTML/text URLs
-are fetched directly, reduced to text, and cached as Markdown; `/refresh`
-forces refetching. The input limits are 8 MB per file, 2 MB per web download,
-12,000 characters per source, 100,000 characters total, and 30 URLs. An
-unreadable source is reported; if all sources fail, the build stops. Removing
-a file via `/remove N` archives it in `cache/` instead of deleting your copy.
+`.docx` (including table cells). Public HTML/text URLs are fetched directly,
+reduced to readable text, and cached as Markdown; `/refresh` forces refetching.
+The input limits are 8 MB per file, 2 MB per web download, 2 million
+extracted characters per source, and 30 URLs. **Source texts are not truncated
+for the final file**; only excerpts sent to the model *for its summary* are
+bounded. If even one source cannot be read completely, the build fails rather
+than producing an incomplete collection. Image-only PDFs need OCR elsewhere;
+embedded pictures, diagrams, and the original PDF page layout are not
+preserved. The output is a reformatted **text** compilation, not a pixel-exact
+PDF merge. Removing a file via `/remove N` archives it in `cache/` instead of
+deleting your copy.
 
 ## Commands
 
@@ -79,7 +92,7 @@ a file via `/remove N` archives it in `cache/` instead of deleting your copy.
 | Working folders | `/new PATH`, `/open PATH`, `/status` |
 | Sources | `/add-file PATH`, `/add-url URL`, `/remove N` |
 | Tavily link search | `/search QUERY`, then `/pick N` to approve a result |
-| Output | `/format markdown|pdf|docx`, `/words N`, `/limit KB|off` |
+| Output | `/format markdown|pdf|docx`, `/words N` (summary), `/limit KB|off` |
 | Human review | `/build`, `/refresh`, `/preview`, `/revise FEEDBACK`, `/approve`, `/reject` |
 | Manual tasks | `/todo TITLE`, `/todos`, `/done N` |
 | Help / stop | `/help` or **F1**, `/cancel` or **Ctrl+X**, `/quit` or **Ctrl+Q** |
@@ -108,10 +121,13 @@ different provider or model is implemented.**
 
 Model-provided `reasoning_content` is displayed if returned, not persisted or
 treated as verified reasoning. Sources are evidence, never instructions. The
-app checks citations and length, attempts at most two revisions, then requires
-human approval. These checks do not prove factual accuracy: read the draft
-before sharing it. URLs to private, loopback, and reserved addresses are
-rejected (including redirects); this is not a hardened public-server sandbox.
+model writes **only the summary**; Python deterministically appends all
+extracted source text. The app checks summary citations and length, attempts
+at most two summary revisions, then requires human approval. It also refuses
+to export if the reviewed draft or source snapshots changed. These checks do
+not prove factual accuracy: read the draft before sharing it. URLs to private,
+loopback, and reserved addresses are rejected (including redirects); this
+is not a hardened public-server sandbox.
 Your extracted text is sent to Foundry, search queries go to Tavily when you
 use `/search`, and approved documents stay local.
 

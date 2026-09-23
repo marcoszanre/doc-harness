@@ -42,7 +42,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.workspace.state["stage"], "Approval required")
         path = Path(export(self.workspace))
         self.assertTrue(path.is_file())
-        self.assertIn("[1] one.md", path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("An important idea.", text)
+        self.assertIn("Another important idea.", text)
+        self.assertIn("[Source 1: One](#source-1)", text)
+        self.assertIn('id="source-2"', text)
         self.assertGreaterEqual(model.calls, 1)
         self.assertNotIn("pending", self.workspace.state)
 
@@ -69,3 +73,10 @@ class WorkflowTests(unittest.TestCase):
             export(self.workspace)
         self.assertFalse(list(self.workspace.output.iterdir()))
         self.assertIn("pending", self.workspace.state)
+
+    def test_modified_draft_cannot_remove_original_content(self):
+        model = FakeModel("A complete weekly overview [1] [2].")
+        build(self.workspace, model, lambda *_: None, Event())
+        (self.workspace.cache / "draft.md").write_text("# Only a summary", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "reviewed draft changed"):
+            export(self.workspace)
