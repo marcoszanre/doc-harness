@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import re
 from pathlib import Path
 from threading import Event
@@ -12,6 +13,7 @@ from azure.core.exceptions import AzureError
 from openai import OpenAIError
 from rich.markdown import Markdown as RichMarkdown
 from rich.text import Text
+from rich.theme import Theme
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -102,31 +104,35 @@ class ComposerInput(Input):
 class ReadingApp(App):
     TITLE = "Doc Harness"
     CSS = """
-    Screen { background: #0d1016; color: #dce2ec; }
+    Screen { background: #101114; color: #d1d6df; }
     #body { height: 1fr; min-height: 0; }
-    #settings { height: 2; padding: 0 2; background: #171d27; color: #aebbd0; }
+    #settings { height: 1; padding: 0 2; background: #191c22; color: #bec6d0; }
+    #workspace-path { height: 1; padding: 0 2; background: #14161b; color: #9eabbc; }
+    #sources-bar { height: 2; padding: 0 2; background: #171a1f; color: #b3c0cf; }
     #progress { height: 1; display: none; }
-    #timeline { height: 1fr; background: #0d1016; scrollbar-size: 1 1; align-horizontal: center; }
-    #thread { width: 100%; max-width: 112; height: auto; padding: 1 3; }
-    #workspace-details { height: auto; margin-bottom: 2; background: #151a23; color: #abb9ca; }
+    #timeline { height: 1fr; background: #101114; scrollbar-size: 1 1; }
+    #thread { width: 100%; height: auto; padding: 1 3; }
+    #workspace-details { height: auto; max-height: 12; overflow-y: auto; background: #171a1f; color: #b9c2d1; }
     #sources, #tasks { height: auto; padding: 0 2; }
-    .role { height: auto; color: #91a5c6; text-style: bold; margin: 1 0 0 0; }
-    .role-user { color: #bca5ed; }
-    .message { height: auto; padding: 0 1; margin: 0 0 1 0; color: #e2e6ee; }
-    .message-user { background: #171b26; padding: 1 2; }
-    .event { height: auto; padding: 0 1; margin: 0 0 1 0; color: #a4afc1; }
-    .event-error { color: #f4a9a6; }
-    .event-done { color: #a6d9bd; }
-    .model-notes { height: auto; margin: 0 0 1 0; background: #151821; color: #abb0c6; }
+    .role { height: auto; color: #aab5c3; text-style: bold; margin: 1 0 0 0; }
+    .role-user { color: #adbbe2; }
+    .message { height: auto; padding: 0 1; margin: 0 0 1 0; color: #d6dae2; }
+    .message-user { background: #191d24; padding: 1 2; }
+    .event { height: auto; padding: 0 1; margin: 0 0 1 0; color: #aeb7c5; }
+    .event-error { color: #d99c98; }
+    .event-done { color: #a9c4ad; }
+    .model-notes { height: auto; margin: 0 0 1 0; background: #181a20; color: #abb4c2; }
     .model-notes Static { height: auto; max-height: 18; overflow-y: auto; padding: 0 1; }
-    #actions { height: 3; padding: 0 2; background: #111720; }
-    #actions Button { width: 11; margin-right: 1; background: #222b39; color: #ccd5e3; border: none; }
-    #actions Button:focus { background: #344667; }
+    #workspace-choice { height: 3; padding: 0 2; background: #14161b; }
+    #workspace-choice Button { width: 20; margin-right: 1; background: #252c38; color: #d2d8e1; border: none; }
+    #actions { height: 3; padding: 0 2; background: #14161b; }
+    #actions Button { width: 11; margin-right: 1; background: #252b34; color: #c8d1dc; border: none; }
+    #actions Button:focus { background: #3b4b64; }
     #format-picker { width: 16; margin-right: 1; }
-    #composer-row { height: 3; padding: 0 2; background: #111720; }
-    #composer { width: 100%; background: #1a2230; border: solid #465772; color: #ffffff; }
-    #stop { color: #e6a7a8; }
-    #hint { height: 1; padding: 0 2; color: #8997aa; background: #111720; }
+    #composer-row { height: 3; padding: 0 2; background: #14161b; }
+    #composer { width: 100%; background: #21252d; border: solid #4c5766; color: #f0f2f5; }
+    #stop { color: #dab0ab; }
+    #hint { height: 1; padding: 0 2; color: #939eae; background: #14161b; }
     """
     BINDINGS = [
         Binding("ctrl+x", "interrupt", "Stop", priority=True),
@@ -134,9 +140,13 @@ class ReadingApp(App):
         Binding("f1", "help", "Help"),
     ]
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path | None, suggested_root: Path | None = None) -> None:
         super().__init__()
-        self.workspace = Workspace.create(root)
+        self.suggested_root = suggested_root or Path.home() / "doc-harness-workspaces" / "weekly"
+        self.workspace = Workspace.create(root) if root is not None else None
+        self.choosing_workspace = root is None
+        self.awaiting_folder_path = False
+        self.pending_import: str | None = None
         self.busy = False
         self.cancel = Event()
         self.suggestions: list[dict] = []
@@ -147,20 +157,26 @@ class ReadingApp(App):
         self._model_notes: Static | None = None
         self._notes_panel: Collapsible | None = None
         self._render_pending = False
+        self._last_sources: tuple = ()
 
     def compose(self) -> ComposeResult:
         with Vertical(id="body"):
             yield Static(id="settings")
+            yield Static(id="workspace-path")
+            yield Static(id="sources-bar")
+            with Collapsible(title="View sources and tasks", collapsed=True, id="workspace-details"):
+                yield Static(id="sources")
+                yield Static(id="tasks")
             yield ProgressBar(total=4, show_eta=False, id="progress")
             with VerticalScroll(id="timeline"):
-                with Vertical(id="thread"):
-                    with Collapsible(title="Sources and tasks", collapsed=True, id="workspace-details"):
-                        yield Static(id="sources")
-                        yield Static(id="tasks")
+                yield Vertical(id="thread")
+            with Horizontal(id="workspace-choice"):
+                yield Button("Use weekly folder", id="use-suggested")
+                yield Button("Choose a folder", id="new-folder")
             with Horizontal(id="actions"):
                 yield Select(
                     [("Markdown", "markdown"), ("PDF", "pdf"), ("Word", "docx")],
-                    value=self.workspace.state["settings"]["format"],
+                    value=self.workspace.state["settings"]["format"] if self.workspace else "markdown",
                     allow_blank=False,
                     id="format-picker",
                 )
@@ -177,11 +193,56 @@ class ReadingApp(App):
             yield Static("Enter send  |  Tab complete  |  Ctrl+X stop  |  Ctrl+Q quit  |  F1 help", id="hint")
 
     def on_mount(self) -> None:
+        self.console.push_theme(Theme({
+            "markdown.link": "#a9bed8",
+            "markdown.link_url": "underline #a9bed8",
+        }))
         self.refresh_panels()
         self._guide()
         self.query_one("#composer", Input).focus()
+        self.set_interval(2.0, self._sync_folder_view)
+
+    def _source_signature(self) -> tuple:
+        if self.workspace is None:
+            return ()
+        try:
+            return tuple(
+                (item["kind"], item["label"],
+                 item["path"].stat().st_mtime_ns if item["kind"] == "file" else item["url"])
+                for item in self.workspace.sources()
+            )
+        except FileNotFoundError:
+            return ()
+
+    def _sync_folder_view(self) -> None:
+        if self.workspace is not None and not self.busy and self._source_signature() != self._last_sources:
+            self.refresh_panels()
+            self._log("SYSTEM", "Sources changed in the working folder; the list is up to date.")
+
+    def _require_workspace(self) -> Workspace:
+        if self.workspace is None:
+            raise ValueError("Choose a working folder before adding sources or building.")
+        return self.workspace
+
+    def _select_workspace(self, folder: Path | str, create: bool = True) -> None:
+        self.workspace = Workspace.create(folder) if create else Workspace(folder)
+        self.choosing_workspace = False
+        self.awaiting_folder_path = False
+        self.refresh_panels()
+        self._chat_log(
+            "Assistant", f"Working folder selected: `{self.workspace.root}`.\n\n{self._source_status()}"
+        )
+        if self.pending_import:
+            pending = self.pending_import
+            self.pending_import = None
+            try:
+                self._add_source(pending)
+            except (ValueError, OSError) as error:
+                self._log("ERROR", str(error))
 
     def _source_status(self) -> str:
+        if self.workspace is None:
+            return "No working folder is selected yet. Choose one to see its sources."
         sources = self.workspace.sources()
         if not sources:
             return "There are no sources in this workspace yet. Paste a file path or public URL to add one."
@@ -193,6 +254,30 @@ class ReadingApp(App):
         return f"**{len(sources)} sources configured** in `{self.workspace.root.name}`:\n\n" + "\n".join(entries)
 
     def _guide(self) -> None:
+        if self.workspace is None:
+            existing = self.suggested_root / ".doc-harness.json"
+            if existing.is_file():
+                try:
+                    count = len(Workspace(self.suggested_root).sources())
+                    message = (
+                        f"I found an existing working folder at `{self.suggested_root}` "
+                        f"with **{count} source(s)**. Select **Use weekly folder** to continue, "
+                        "or **Choose a folder** to work elsewhere."
+                    )
+                except (ValueError, OSError) as error:
+                    message = (
+                        f"The suggested folder at `{self.suggested_root}` cannot be opened: {error}. "
+                        "Select **Choose a folder** and provide another location."
+                    )
+            else:
+                message = (
+                    f"Where should I keep your reading collection? "
+                    f"Select **Use weekly folder** for `{self.suggested_root}`, "
+                    "or **Choose a folder** and paste a directory path. "
+                    "I won't create one until you decide."
+                )
+            self._chat_log("Assistant", message)
+            return
         count = len(self.workspace.sources())
         if self.workspace.state["stage"] == "Exported":
             message = (
@@ -218,20 +303,33 @@ class ReadingApp(App):
         self._chat_log("GUIDE", message)
 
     def _add_source(self, raw: str) -> None:
+        workspace = self._require_workspace()
         item = raw.strip().strip('"').strip("'")
         parsed = urlsplit(item)
         if parsed.scheme in {"http", "https"} and parsed.netloc:
-            if item in self.workspace.state["sources"]:
+            if item in workspace.state["sources"]:
                 self._chat_log("Assistant", "That link is already in your workspace.\n\n" + self._source_status())
                 return
-            self.workspace.add_url(item)
+            workspace.add_url(item)
             description = "link"
         elif (
             re.match(r"^(?:[A-Za-z]:[\\/]|[~.][\\/]|\\\\)", item)
             or Path(item).is_file()
-            or Path(item).suffix.lower() in INPUT_SUFFIXES
         ):
-            self.workspace.add_file(item)
+            try:
+                workspace.add_file(item)
+            except FileNotFoundError as error:
+                path = Path(item).expanduser()
+                try:
+                    neighbors = [
+                        child.name for child in path.parent.iterdir()
+                        if child.is_file() and child.suffix.lower() == path.suffix.lower()
+                    ] if path.parent.is_dir() else []
+                except OSError:
+                    neighbors = []
+                similar = difflib.get_close_matches(path.name, neighbors, n=3, cutoff=0.55)
+                hint = f" Did you mean: {', '.join(similar)}?" if similar else ""
+                raise ValueError(f"File not found: {path}.{hint}") from error
             description = "file"
         else:
             raise ValueError("Paste a local .pdf/.docx/.md/.txt/.html file path or a public http(s) URL.")
@@ -245,7 +343,10 @@ class ReadingApp(App):
             timeline.anchor()
 
     def _log(self, label: str, message: str) -> None:
-        style = {"ERROR": "red", "STEP": "dim", "SYSTEM": "cyan", "DONE": "green"}.get(label, "dim")
+        style = {
+            "ERROR": "#d99c98", "STEP": "#aab4c2",
+            "SYSTEM": "#b8c6d7", "DONE": "#a9c4ad",
+        }.get(label, "#aab4c2")
         marker = "!" if label == "ERROR" else "-" if label == "STEP" else "+"
         self._scroll_if_at_end()
         self.query_one("#thread", Vertical).mount(
@@ -265,19 +366,56 @@ class ReadingApp(App):
 
     def refresh_panels(self) -> None:
         workspace = self.workspace
+        if workspace is None:
+            self.query_one("#settings", Static).update(Text("doc harness   /   choose a working folder", style="#b9c7d7"))
+            self.query_one("#workspace-path", Static).update(Text(
+                f"Suggested folder: {self.suggested_root}", style="#aab8c7"
+            ))
+            self.query_one("#sources-bar", Static).update(Text("Sources: select a working folder to continue."))
+            self.query_one("#sources", Static).update(Text("No folder selected."))
+            self.query_one("#tasks", Static).update(Text("No folder selected."))
+            self.query_one("#workspace-choice", Horizontal).display = True
+            self.query_one("#actions", Horizontal).display = False
+            return
+        self.query_one("#workspace-choice", Horizontal).display = False
+        self.query_one("#actions", Horizontal).display = True
         sources = workspace.sources()
-        source_lines = [f"{n}. {item['label']}" for n, item in enumerate(sources, 1)]
+        self._last_sources = self._source_signature()
+        source_lines = [f"{n}. {'File' if item['kind'] == 'file' else 'Link'}: {item['label']}"
+                        for n, item in enumerate(sources, 1)]
         self.query_one("#sources", Static).update(Text(
-            "Sources\n" + ("\n".join(source_lines) if source_lines else "No sources yet.")
+            "Full source list\n" + ("\n".join(source_lines) if source_lines else "No sources yet.")
         ))
+        concise = []
+        label_width = max(18, min(100, self.size.width - 24))
+        for number, item in enumerate(sources[:2], 1):
+            if item["kind"] == "url":
+                parsed = urlsplit(item["url"])
+                label = f"{parsed.hostname} / {parsed.path.rstrip('/').split('/')[-1]}"
+            else:
+                label = item["label"]
+            concise.append(f"{number}. {label[:label_width]}")
+        if not concise:
+            concise = ["No sources yet. Paste a file path or a public URL."]
+        if len(sources) > 2:
+            concise[-1] += f"  (+{len(sources) - 2} more)"
+        self.query_one("#sources-bar", Static).update(Text(
+            f"Sources ({len(sources)})  " + concise[0]
+            + ("\n              " + concise[1] if len(concise) > 1 else "")
+        ))
+        self.query_one("#workspace-details", Collapsible).title = (
+            f"Sources ({len(sources)}) and tasks — expand for full details"
+        )
         settings = workspace.state["settings"]
-        title = Text("doc harness", style="bold #b4a3eb")
+        title = Text("doc harness", style="bold #bfc7d6")
         title.append(
-            f"   {workspace.root.name}  /  {len(sources)} sources  /  "
-            f"{settings['format'].upper()}  /  {workspace.state['stage']}",
-            style="#acb8c9",
+            f"   {settings['format'].upper()}  /  {workspace.state['stage']}",
+            style="#b2bdcc",
         )
         self.query_one("#settings", Static).update(title)
+        self.query_one("#workspace-path", Static).update(Text(
+            f"Working folder: {workspace.root}", style="#aab8c7"
+        ))
         picker = self.query_one("#format-picker", Select)
         if picker.value != settings["format"]:
             picker.value = settings["format"]
@@ -332,6 +470,7 @@ class ReadingApp(App):
             self._live_answer.update(RichMarkdown(self.answer))
 
     def _start(self, kind: str, payload: str = "") -> None:
+        self._require_workspace()
         if self.busy:
             self._log("SYSTEM", "Finish or interrupt the active operation first.")
             return
@@ -425,17 +564,30 @@ class ReadingApp(App):
         self._chat_log("COMMANDS", HELP)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "build":
-            self._start("build")
-        elif event.button.id == "preview":
-            self._command("/preview", "")
-        elif event.button.id == "approve":
-            self._start("export")
-        elif event.button.id == "stop":
-            self.action_interrupt()
+        try:
+            if event.button.id == "use-suggested":
+                self._select_workspace(self.suggested_root)
+            elif event.button.id == "new-folder":
+                self.awaiting_folder_path = True
+                self._chat_log("Assistant", "Paste the full path to the folder you want to use. "
+                               "I will create it if it does not exist.")
+                self.query_one("#composer", Input).focus()
+            elif event.button.id == "build":
+                self._start("build")
+            elif event.button.id == "preview":
+                self._command("/preview", "")
+            elif event.button.id == "approve":
+                self._start("export")
+            elif event.button.id == "stop":
+                self.action_interrupt()
+        except (ValueError, OSError, RuntimeError) as error:
+            self._log("ERROR", str(error))
+        self.refresh_panels()
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id != "format-picker" or event.value not in {"markdown", "pdf", "docx"}:
+            return
+        if self.workspace is None:
             return
         if event.value != self.workspace.state["settings"]["format"]:
             self.workspace.set_format(event.value)
@@ -449,6 +601,10 @@ class ReadingApp(App):
             return
         self.query_one("#timeline", VerticalScroll).anchor()
         try:
+            if self.workspace is None:
+                self._handle_workspace_input(text)
+                self.refresh_panels()
+                return
             if text.startswith("/") and not Path(text.strip('"').strip("'")).is_file():
                 command, _, argument = text.partition(" ")
                 self._command(command.lower(), argument.strip().strip('"').strip("'"))
@@ -458,15 +614,73 @@ class ReadingApp(App):
             self._log("ERROR", str(error))
         self.refresh_panels()
 
+    @staticmethod
+    def _embedded_file_path(text: str) -> str | None:
+        match = re.search(
+            r"(?i)([A-Z]:[\\/][^\r\n\"']+?\.(?:pdf|docx|md|txt|html|htm))"
+            r"(?=[\"'\s]|$)",
+            text,
+        )
+        return match.group(1).strip() if match else None
+
+    @staticmethod
+    def _plain_local_file(text: str) -> bool:
+        if len(text) > 240 or any(character in text for character in ('"', "'", ":")):
+            return False
+        return Path(text).suffix.lower() in INPUT_SUFFIXES and Path(text).is_file()
+
+    def _handle_workspace_input(self, text: str) -> None:
+        value = text.strip().strip('"').strip("'")
+        lower = value.lower()
+        if lower in {"continue", "use weekly", "use suggested", "usar semanal", "usar sugerida"}:
+            self._select_workspace(self.suggested_root)
+            return
+        if lower in {"/help", "/?"}:
+            self.action_help()
+            return
+        if lower in {"/quit", "/exit"}:
+            self.exit()
+            return
+        if lower.startswith(("/new ", "/open ")):
+            command, _, folder = value.partition(" ")
+            self._select_workspace(folder, create=command.lower() == "/new")
+            return
+        folder = re.match(
+            r"^(?:use|create|open|switch to|usar|criar|abrir)(?: a| my| uma)? "
+            r"(?:folder|workspace|pasta)\s+(.+)$",
+            value, flags=re.I,
+        )
+        if folder:
+            self._select_workspace(folder.group(1).strip().strip('"').strip("'"))
+            return
+        embedded = self._embedded_file_path(value)
+        if urlsplit(value).scheme in {"http", "https"} or embedded or self._plain_local_file(value):
+            self.pending_import = embedded or value
+            self._chat_log("Assistant", "I have that source ready. Choose a working folder first; "
+                           "I will add it there after you select one.")
+            return
+        if self.awaiting_folder_path or re.match(r"^(?:[A-Z]:[\\/]|[~.][\\/]|\\\\)", value, re.I):
+            self._select_workspace(value)
+            return
+        self._guide()
+
     def _handle_text(self, text: str) -> None:
         value = text.strip().strip('"').strip("'")
         lower = value.lower()
-        if (
-            urlsplit(value).scheme in {"http", "https"}
-            or re.match(r"^(?:[A-Za-z]:[\\/]|[~.][\\/]|\\\\)", value)
-            or Path(value).is_file()
-            or Path(value).suffix.lower() in INPUT_SUFFIXES
+        if urlsplit(value).scheme in {"http", "https"} or re.match(
+            r"^(?:[A-Za-z]:[\\/]|[~.][\\/]|\\\\)", value
         ):
+            self._add_source(value)
+            return
+        embedded = self._embedded_file_path(value)
+        if embedded and re.search(
+            r"\b(?:add|include|import|adicionar|incluir|adicione|inclua|"
+            r"tbm|tambem|também|also)\b",
+            lower,
+        ):
+            self._add_source(embedded)
+            return
+        if self._plain_local_file(value):
             self._add_source(value)
             return
         attachment = re.match(
@@ -484,9 +698,7 @@ class ReadingApp(App):
             r"(?:folder|workspace|pasta)\s+(.+)$", value, flags=re.I,
         )
         if folder:
-            self.workspace = Workspace.create(folder.group(1).strip().strip('"').strip("'"))
-            self.suggestions = []
-            self._guide()
+            self._select_workspace(folder.group(1).strip().strip('"').strip("'"))
             return
         if lower in {"start", "let's start", "lets start", "help", "begin", "comecar", "começar", "bora iniciar", "oi"}:
             self._guide()
@@ -579,17 +791,15 @@ class ReadingApp(App):
         elif command == "/new":
             if not argument:
                 raise ValueError("Usage: /new PATH")
-            self.workspace = Workspace.create(Path(argument))
+            self._select_workspace(Path(argument))
             self.suggestions = []
-            self._log("SYSTEM", f"Active workspace: {self.workspace.root}")
         elif command == "/open":
-            self.workspace = Workspace(Path(argument))
+            self._select_workspace(Path(argument), create=False)
             self.suggestions = []
-            self._log("SYSTEM", f"Opened: {self.workspace.root}")
         elif command in {"/add", "/add-file", "/add-url"}:
             self._add_source(argument)
         elif command == "/remove":
-            self._log("SYSTEM", f"Removed: {workspace.remove_source(int(argument))}")
+            self._log("SYSTEM", f"Removed: {self._require_workspace().remove_source(int(argument))}")
         elif command == "/search":
             self._start("search", argument)
         elif command == "/pick":

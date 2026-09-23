@@ -12,9 +12,10 @@ are no templates, browser automation, Google integration, or agent tool loop.
 The only model/provider is **DeepSeek-V4-Pro on Azure Foundry**.
 
 The full-screen Textual interface runs in the terminal's interactive/raw mode;
-it is not a cooked `input()` prompt. It focuses on **one scrolling conversation
-column** with rendered Markdown and compact, unobtrusive progress lines.
-Sources and tasks are collapsible rather than occupying a permanent sidebar;
+it is not a cooked `input()` prompt. It focuses on **one full-width scrolling
+conversation** with rendered Markdown and compact, unobtrusive progress lines.
+The working folder and up to two current sources stay visible above the chat;
+the full source/task list is available in the collapsible detail strip.
 model-provided reasoning, *when available*, is collapsed beneath the answer.
 The full-width composer accepts pasted file paths, URLs, or ordinary requests.
 Buttons cover common actions; the composer locks during generation and
@@ -33,9 +34,13 @@ az login
 .\.venv\Scripts\python.exe -m doc_harness
 ```
 
-Use `python3 -m venv .venv` and `.venv/bin/python` on macOS/Linux. The default
-working folder is `~/doc-harness-workspaces/weekly`, outside the repository.
-To choose another folder:
+Use `python3 -m venv .venv` and `.venv/bin/python` on macOS/Linux. On launch,
+the app **asks where to work**. It suggests `~/doc-harness-workspaces/weekly`
+if you want a default; it neither opens nor creates that folder until you
+choose it. The fixed header displays the **full working-folder path** so you
+can find `inputs/` and `output/`; those directories are not inside the
+cloned Git repository unless you explicitly put them there.
+To bypass the prompt and select a folder directly:
 
 ```powershell
 .\.venv\Scripts\python.exe -m doc_harness --workspace "$HOME\Documents\reading-week"
@@ -60,8 +65,8 @@ The suggestion in the composer completes slash commands and local paths with
 Ask **"which sources are configured?"** (or **"quais sources estão
 configurados?"**) to see the actual files and URLs in the active workspace.
 This inventory is read directly from the folder, not guessed by the model.
-Open **Sources and tasks** at the top of the transcript to inspect them
-without leaving the conversation. Use the mouse wheel or Page Up/Page Down
+Open the fixed **Sources and tasks** strip to inspect them without leaving
+the conversation. Use the mouse wheel or Page Up/Page Down
 to scroll; incoming output follows the bottom until you scroll up to read.
 
 The approved file appears in your folder's `output/` directory. Its summary,

@@ -33,10 +33,58 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                         self.assertLessEqual(composer.region.bottom, app.size.height - 1)
                         self.assertGreaterEqual(composer.region.width, app.size.width - 4)
                         self.assertIs(app.focused, composer)
-                        self.assertLessEqual(app.query_one("#thread", Vertical).region.width, 112)
+                        self.assertGreaterEqual(app.query_one("#thread", Vertical).region.width, app.size.width - 2)
                         self.assertTrue(app.query_one("#workspace-details", Collapsible).collapsed)
                         await pilot.press("a")
                         self.assertEqual(composer.value, "a")
+
+    async def test_first_launch_asks_before_creating_a_workspace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            suggested = Path(directory) / "weekly"
+            app = ReadingApp(None, suggested_root=suggested)
+            async with app.run_test(size=(100, 32)) as pilot:
+                await pilot.pause()
+                self.assertIsNone(app.workspace)
+                self.assertFalse(suggested.exists())
+                self.assertTrue(app.query_one("#workspace-choice").display)
+                await pilot.click("#use-suggested")
+                self.assertEqual(app.workspace.root, suggested.resolve())
+                self.assertTrue((suggested / "inputs").is_dir())
+                self.assertFalse(app.query_one("#workspace-choice").display)
+                self.assertIn(str(suggested.resolve()), str(app.query_one("#workspace-path", Static).render()))
+
+    async def test_existing_sources_are_fixed_above_scrolling_chat(self):
+        with tempfile.TemporaryDirectory() as directory:
+            suggested = Path(directory) / "weekly"
+            from doc_harness.workspace import Workspace
+
+            existing = Workspace.create(suggested)
+            (existing.inputs / "article.pdf").write_bytes(b"example")
+            existing.add_url("https://example.org/post")
+            app = ReadingApp(None, suggested_root=suggested)
+            async with app.run_test(size=(100, 28)) as pilot:
+                await pilot.pause()
+                self.assertIsNone(app.workspace)
+                await pilot.click("#use-suggested")
+                for number in range(25):
+                    app._chat_log("Assistant", f"Message {number}.")
+                await pilot.pause()
+                sources = app.query_one("#sources-bar", Static)
+                timeline = app.query_one("#timeline", VerticalScroll)
+                self.assertTrue(sources.is_on_screen)
+                self.assertLess(sources.region.y, timeline.region.y)
+                self.assertIn("Sources (2)", str(sources.render()))
+
+    async def test_dropped_file_refreshes_the_fixed_source_bar(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = ReadingApp(Path(directory) / "weekly")
+            async with app.run_test(size=(100, 28)) as pilot:
+                await pilot.pause()
+                (app.workspace.inputs / "dropped.md").write_text("A new source.", encoding="utf-8")
+                app._sync_folder_view()
+                await pilot.pause()
+                self.assertIn("Sources (1)", str(app.query_one("#sources-bar", Static).render()))
+                self.assertIn("dropped.md", str(app.query_one("#sources-bar", Static).render()))
 
     async def test_long_conversation_scrolls_and_renders_markdown(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -70,7 +118,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(app.busy)
                     self.assertIn("article.pdf", app._source_status())
                     self.assertIn("https://example.org/post", app._source_status())
-                    self.assertIn("2 sources", str(app.query_one("#settings", Static).render()))
+                    self.assertIn("Sources (2)", str(app.query_one("#sources-bar", Static).render()))
 
     async def test_autocomplete_commands_and_local_paths(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -116,6 +164,39 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                 app.query_one("#format-picker", Select).value = "pdf"
                 await pilot.pause()
                 self.assertEqual(app.workspace.state["settings"]["format"], "pdf")
+
+    async def test_sentence_with_quoted_windows_pdf_path_adds_only_that_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "Online Services Subprocessors List (2026-09-10).pdf"
+            source.write_bytes(b"content")
+            app = ReadingApp(Path(directory) / "weekly")
+            async with app.run_test(size=(120, 32)) as pilot:
+                await pilot.pause()
+                composer = app.query_one("#composer", Input)
+                composer.value = f'Show pode add esse tbm pls - "{source}"'
+                await pilot.press("enter")
+                self.assertEqual(len(app.workspace.sources()), 1)
+                self.assertEqual(app.workspace.sources()[0]["label"], source.name)
+
+    async def test_missing_pdf_shows_nearby_filename_instead_of_invalid_path_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            downloads = Path(directory) / "Downloads"
+            downloads.mkdir()
+            present = downloads / "Services Subprocessors List (2026-06-23) .pdf"
+            present.write_bytes(b"example")
+            missing = downloads / "Services Subprocessors List (2026-09-10).pdf"
+            app = ReadingApp(Path(directory) / "weekly")
+            async with app.run_test(size=(115, 32)) as pilot:
+                await pilot.pause()
+                with patch.object(app, "_log", wraps=app._log) as logged:
+                    app.query_one("#composer", Input).value = f'Esse tbm pls - "{missing}"'
+                    await pilot.press("enter")
+                await pilot.pause()
+                self.assertFalse(app.workspace.sources())
+                errors = [call.args[1] for call in logged.call_args_list if call.args[0] == "ERROR"]
+                self.assertEqual(len(errors), 1)
+                self.assertIn("File not found", errors[0])
+                self.assertIn(present.name, errors[0])
 
     async def test_toolbar_build_preview_and_export(self):
         with tempfile.TemporaryDirectory() as directory, patch("doc_harness.tui.Foundry", FakeFoundry):

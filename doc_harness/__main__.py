@@ -12,8 +12,8 @@ from .tui import ReadingApp
 def main() -> int:
     parser = argparse.ArgumentParser(description="Full-screen weekly reading list harness.")
     parser.add_argument(
-        "--workspace", type=Path, default=Path.home() / "doc-harness-workspaces" / "weekly",
-        help="Workspace to open or create (default: ~/doc-harness-workspaces/weekly).",
+        "--workspace", type=Path,
+        help="Open or create this workspace directly. Without it, the TUI asks where to work.",
     )
     args = parser.parse_args()
     if not sys.stdin.isatty() or not sys.stdout.isatty():
