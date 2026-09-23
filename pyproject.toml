@@ -3,8 +3,8 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "doc-harness"
-version = "0.1.0"
+name = "reading-harness"
+version = "0.2.0"
 description = "Turn a week's reading into one reviewed, source-linked document."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-doc-harness = "doc_harness.__main__:main"
+reading-harness = "doc_harness.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["doc_harness*"]

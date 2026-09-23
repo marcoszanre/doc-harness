@@ -38,6 +38,16 @@ class WorkspaceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.workspace.set_max_file_kb(2)
 
+    def test_output_format_and_size_keep_the_approved_content(self):
+        self.workspace.state["pending"] = {"approved": True}
+        self.workspace.save()
+        fingerprint = self.workspace.fingerprint()
+        self.workspace.set_format("pdf")
+        self.workspace.set_max_file_kb(1000)
+        self.assertEqual(self.workspace.fingerprint(), fingerprint)
+        self.assertTrue(self.workspace.state["pending"]["approved"])
+        self.assertEqual(self.workspace.state["stage"], "Ready to export")
+
     def test_readding_the_same_file_does_not_fail_or_duplicate(self):
         source = self.root / "source.md"
         source.write_text("A complete source.", encoding="utf-8")

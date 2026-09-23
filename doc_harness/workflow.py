@@ -112,7 +112,6 @@ def _save_draft(workspace: Workspace, introduction: str, sources: list[IndexedSo
 
 def build(workspace: Workspace, model: Foundry, emit, cancel: Event, refresh: bool = False) -> Review:
     target = workspace.state["settings"]["target_words"]
-    workspace.state.pop("pending", None)
     workspace.state["stage"] = "Indexing"
     workspace.save()
     sources, _ = index_sources(workspace, emit, cancel, refresh)

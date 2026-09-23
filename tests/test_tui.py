@@ -383,6 +383,61 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                         break
                 self.assertEqual(app.workspace.state["stage"], "Exported")
 
+    async def test_changing_format_reexports_approved_draft_without_model_tokens(self):
+        with tempfile.TemporaryDirectory() as directory, patch("doc_harness.tui.Foundry", FakeFoundry):
+            app = ReadingApp(Path(directory) / "weekly")
+            (app.workspace.inputs / "note.md").write_text("Complete note.", encoding="utf-8")
+            async with app.run_test(size=(110, 36)) as pilot:
+                await pilot.pause()
+                await pilot.click("#build")
+                for _ in range(100):
+                    await pilot.pause(0.05)
+                    if not app.busy:
+                        break
+                await pilot.click("#approve")
+                for _ in range(100):
+                    await pilot.pause(0.05)
+                    if not app.busy:
+                        break
+                requests = app.workspace.state["usage"]["requests"]
+                app.query_one("#format-picker", Select).value = "pdf"
+                await pilot.pause()
+                self.assertEqual(app.workspace.state["stage"], "Ready to export")
+                self.assertFalse(app.query_one("#approve", Button).disabled)
+                await pilot.click("#approve")
+                for _ in range(100):
+                    await pilot.pause(0.05)
+                    if not app.busy:
+                        break
+                self.assertEqual(requests, app.workspace.state["usage"]["requests"])
+                self.assertEqual(len(list(app.workspace.output.glob("*.pdf"))), 1)
+
+    async def test_make_pdf_reuses_an_approved_markdown_edition(self):
+        with tempfile.TemporaryDirectory() as directory, patch("doc_harness.tui.Foundry", FakeFoundry):
+            app = ReadingApp(Path(directory) / "weekly")
+            (app.workspace.inputs / "note.md").write_text("Complete note.", encoding="utf-8")
+            async with app.run_test(size=(110, 36)) as pilot:
+                await pilot.pause()
+                await pilot.click("#build")
+                for _ in range(100):
+                    await pilot.pause(0.05)
+                    if not app.busy:
+                        break
+                await pilot.click("#approve")
+                for _ in range(100):
+                    await pilot.pause(0.05)
+                    if not app.busy:
+                        break
+                requests = app.workspace.state["usage"]["requests"]
+                app.query_one("#composer", Input).value = "make a PDF"
+                await pilot.press("enter")
+                for _ in range(100):
+                    await pilot.pause(0.05)
+                    if not app.busy:
+                        break
+                self.assertEqual(requests, app.workspace.state["usage"]["requests"])
+                self.assertEqual(len(list(app.workspace.output.glob("*.pdf"))), 1)
+
     async def test_natural_language_and_expert_skills_share_the_workflow(self):
         with tempfile.TemporaryDirectory() as directory, patch("doc_harness.tui.Foundry", FakeFoundry):
             source = Path(directory) / "story.md"

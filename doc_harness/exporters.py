@@ -23,9 +23,9 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate
 
-from .sources import IndexedSource
-from .workspace import Workspace
-from .workflow import compose, load_snapshots, source_title
+from .sources import IndexedSource, read_file
+from .workspace import Workspace, atomic_text
+from .workflow import compose, load_snapshots, review, source_title
 
 
 def lines(markdown: str):
@@ -300,7 +300,81 @@ def write_pdf(
     doc.build(story)
 
 
+def restore_approved(workspace: Workspace) -> bool:
+    if workspace.state.get("pending"):
+        return True
+    if workspace.state.get("stage") != "Exported" or not workspace.state.get("last_output"):
+        return False
+    previous_output = Path(workspace.state["last_output"]).resolve()
+    if not previous_output.is_relative_to(workspace.output) or not previous_output.is_file():
+        raise ValueError("The previous output is missing. Run Build before exporting again.")
+    draft_path = workspace.cache / "draft.md"
+    if not draft_path.is_file():
+        raise ValueError("The previous reviewed draft is missing. Run Build again.")
+    draft = draft_path.read_text(encoding="utf-8")
+    try:
+        intro_with_links = draft.split("## Edition Summary\n\n", 1)[1].split("\n\n## Contents\n", 1)[0]
+    except IndexError as error:
+        raise ValueError("The previous draft cannot be reused. Run Build once.") from error
+    intro = re.sub(
+        r"\[(\d+)\]\(#source-\1\)", lambda match: f"[{match.group(1)}]", intro_with_links,
+    )
+    items = workspace.sources()
+    sources: list[IndexedSource] = []
+    snapshots = []
+    for number, item in enumerate(items, 1):
+        start = f'<a id="source-{number}"></a>\n### Source {number}:'
+        if start not in draft:
+            raise ValueError("The previous draft no longer matches its source list. Run Build again.")
+        section = draft.split(start, 1)[1].split("\n\n", 1)[1]
+        end = f'<a id="source-{number + 1}"></a>' if number < len(items) else "## Original Sources"
+        if end not in section:
+            raise ValueError("The previous draft is incomplete. Run Build again.")
+        content = section.split(end, 1)[0].strip("\n")
+        reference = item.get("url", item["label"])
+        found = None
+        for snapshot in workspace.cache.glob(f"source-{number:03d}-*.txt"):
+            text = snapshot.read_text(encoding="utf-8")
+            if text.strip("\n") == content:
+                found = snapshot
+                break
+        if found is None:
+            raise ValueError("A previous source snapshot is missing. Run Build again.")
+        if item["kind"] == "file" and read_file(item["path"]).strip("\n") != content:
+            raise ValueError("An input file changed since approval. Run Build again.")
+        text = found.read_text(encoding="utf-8")
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        sources.append(IndexedSource(item["label"], reference, text))
+        snapshots.append({
+            "label": item["label"], "reference": reference,
+            "snapshot": found.name, "sha256": digest,
+        })
+    quality = review(intro, sources, workspace.state["settings"]["target_words"])
+    if quality.issues:
+        raise ValueError("The previous summary no longer passes citation review. Run Build again.")
+    normalized = compose(intro, sources)
+    if normalized != draft:
+        backup = workspace.cache / f"draft-before-reuse-{hashlib.sha256(draft.encode()).hexdigest()[:12]}.md"
+        if not backup.exists():
+            atomic_text(backup, draft)
+        atomic_text(draft_path, normalized)
+    workspace.state["pending"] = {
+        "fingerprint": workspace.fingerprint(),
+        "sources": snapshots,
+        "intro": intro,
+        "draft_sha256": hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
+        "review": {
+            "issues": quality.issues, "warnings": quality.warnings, "word_count": quality.word_count,
+        },
+        "approved": True,
+    }
+    workspace.state["last_format"] = previous_output.suffix.lstrip(".").replace("md", "markdown")
+    workspace.save()
+    return True
+
+
 def export(workspace: Workspace) -> str:
+    restore_approved(workspace)
     pending = workspace.state.get("pending")
     if not pending:
         raise ValueError("No draft is waiting for approval. Run /build first.")
@@ -342,6 +416,7 @@ def export(workspace: Workspace) -> str:
     result = str(path)
     workspace.state["stage"] = "Exported"
     workspace.state["last_output"] = result
-    workspace.state.pop("pending")
+    workspace.state["last_format"] = fmt
+    pending["approved"] = True
     workspace.save()
     return result

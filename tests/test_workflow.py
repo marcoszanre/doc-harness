@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from threading import Event
 
-from doc_harness.exporters import export
+from doc_harness.exporters import export, restore_approved
 from doc_harness.foundry import Completion
 from doc_harness.workflow import build, review
 from doc_harness.workspace import Workspace
@@ -48,7 +48,34 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("[Source 1: One](#source-1)", text)
         self.assertIn('id="source-2"', text)
         self.assertGreaterEqual(model.calls, 1)
-        self.assertNotIn("pending", self.workspace.state)
+        self.assertTrue(self.workspace.state["pending"]["approved"])
+
+    def test_approved_draft_exports_three_formats_without_another_model_call(self):
+        model = FakeModel("# Weekly\n\n## Insights\n\nBoth sources matter [1] [2].")
+        build(self.workspace, model, lambda *_: None, Event())
+        first = Path(export(self.workspace))
+        calls = model.calls
+        self.workspace.set_format("pdf")
+        pdf = Path(export(self.workspace))
+        self.workspace.set_format("docx")
+        word = Path(export(self.workspace))
+        self.assertEqual(model.calls, calls)
+        self.assertEqual([first.suffix, pdf.suffix, word.suffix], [".md", ".pdf", ".docx"])
+        self.assertTrue(all(path.is_file() for path in (first, pdf, word)))
+        self.assertTrue(self.workspace.state["pending"]["approved"])
+        self.assertEqual(self.workspace.state["last_output"], str(word))
+
+    def test_previous_completed_workspace_recovers_approved_draft(self):
+        model = FakeModel("Both sources are included [1] [2].")
+        build(self.workspace, model, lambda *_: None, Event())
+        export(self.workspace)
+        self.workspace.state.pop("pending")
+        self.workspace.save()
+        reopened = Workspace(self.workspace.root)
+        self.assertTrue(restore_approved(reopened))
+        reopened.set_format("pdf")
+        self.assertEqual(Path(export(reopened)).suffix, ".pdf")
+        self.assertEqual(model.calls, 3)
 
     def test_changed_file_disallows_export(self):
         model = FakeModel("# Weekly\n\n## Notes\n\nA [1] and B [2].")

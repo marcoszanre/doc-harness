@@ -31,7 +31,7 @@ class Workspace:
         self.root = Path(root).expanduser().resolve()
         self.state_path = self.root / ".doc-harness.json"
         if not self.state_path.is_file():
-            raise ValueError(f"Not a Doc Harness workspace: {self.root}. Use /new first.")
+            raise ValueError(f"Not a Reading Harness workspace: {self.root}. Use /new first.")
         self.inputs = self.root / "inputs"
         self.cache = self.root / "cache"
         self.output = self.root / "output"
@@ -81,7 +81,7 @@ class Workspace:
             (item["path"].name, item["path"].stat().st_size, item["path"].stat().st_mtime_ns)
             for item in self.sources() if item["kind"] == "file"
         ]
-        data = [inputs, self.state["sources"], self.state["settings"]]
+        data = [inputs, self.state["sources"], self.state["settings"]["target_words"]]
         return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
     def add_file(self, source: Path | str) -> Path:
@@ -150,7 +150,8 @@ class Workspace:
         if value not in FORMATS:
             raise ValueError(f"Choose one of: {', '.join(FORMATS)}.")
         self.state["settings"]["format"] = value
-        self.invalidate()
+        if self.state.get("pending", {}).get("approved"):
+            self.state["stage"] = "Ready to export"
         self.save()
 
     def set_target_words(self, value: int) -> None:
@@ -164,7 +165,6 @@ class Workspace:
         if value is not None and not 10 <= value <= 50_000:
             raise ValueError("Maximum file size must be between 10 and 50,000 KB.")
         self.state["settings"]["max_file_kb"] = value
-        self.invalidate()
         self.save()
 
     def add_todo(self, title: str) -> None:

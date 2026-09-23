@@ -28,7 +28,7 @@ from .workspace import Workspace
 MAX_DOWNLOAD = 2_000_000
 MAX_EXTRACTED_CHARS = 2_000_000
 EXTRACTION_CACHE_VERSION = 2
-HEADERS = {"User-Agent": "DocHarness/0.1 (weekly reading list)", "Accept": "text/html,text/plain,text/markdown,application/pdf"}
+HEADERS = {"User-Agent": "ReadingHarness/0.2 (weekly reading collection)", "Accept": "text/html,text/plain,text/markdown,application/pdf"}
 
 
 def public_url(url: str) -> str:

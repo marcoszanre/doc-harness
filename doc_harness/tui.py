@@ -24,7 +24,7 @@ from textual.widgets import Button, Collapsible, ProgressBar, Select, Static, Te
 
 from .chat import chat
 from .clipboard import read_clipboard_text
-from .exporters import export
+from .exporters import export, restore_approved
 from .foundry import Completion, Foundry
 from .input_parser import extract_sources, only_sources
 from .skills import SKILLS, read_skill
@@ -161,7 +161,7 @@ class ComposerInput(TextArea):
 
 
 class ReadingApp(App):
-    TITLE = "Doc Harness"
+    TITLE = "Reading Harness"
     CSS = """
     Screen { background: #101114; color: #d1d6df; }
     #body { height: 1fr; min-height: 0; }
@@ -203,7 +203,11 @@ class ReadingApp(App):
 
     def __init__(self, root: Path | None, suggested_root: Path | None = None) -> None:
         super().__init__()
-        self.suggested_root = suggested_root or Path.home() / "doc-harness-workspaces" / "weekly"
+        current = Path.home() / "reading-harness-workspaces" / "weekly"
+        legacy = Path.home() / "doc-harness-workspaces" / "weekly"
+        self.suggested_root = suggested_root or (
+            legacy if not current.exists() and (legacy / ".doc-harness.json").is_file() else current
+        )
         self.workspace = Workspace.create(root) if root is not None else None
         self.choosing_workspace = root is None
         self.awaiting_folder_path = False
@@ -269,6 +273,11 @@ class ReadingApp(App):
             + ("Shift+Enter newline  |  " if shift_enter_ready else "Ctrl+J / New line newline  |  ")
             + "Tab complete  |  F1 help"
         )
+        if self.workspace is not None:
+            try:
+                restore_approved(self.workspace)
+            except (ValueError, OSError) as error:
+                self._log("ERROR", str(error))
         self.refresh_panels()
         self._guide()
         self.query_one("#composer", ComposerInput).focus()
@@ -316,6 +325,10 @@ class ReadingApp(App):
         self.workspace = Workspace.create(folder) if create else Workspace(folder)
         self.choosing_workspace = False
         self.awaiting_folder_path = False
+        try:
+            restore_approved(self.workspace)
+        except (ValueError, OSError) as error:
+            self._log("ERROR", str(error))
         self.refresh_panels()
         self._chat_log(
             "Assistant",
@@ -367,10 +380,17 @@ class ReadingApp(App):
             self._chat_log("Assistant", message)
             return
         count = len(self.workspace.sources())
-        if self.workspace.state["stage"] == "Exported":
+        pending = self.workspace.state.get("pending")
+        if pending and pending.get("approved"):
+            message = (
+                f"The approved collection with **{count} sources** is ready. "
+                "Choose PDF, Word, or Markdown and select **Export**; I will reuse "
+                "the same approved text without calling the model again."
+            )
+        elif self.workspace.state["stage"] == "Exported":
             message = (
                 f"Done. Your complete collection is at {self.workspace.state.get('last_output')}. "
-                "Paste another source whenever you want to start a new edition."
+                "If the previous draft cannot be restored, select Build once."
             )
         elif not count:
             message = (
@@ -491,7 +511,7 @@ class ReadingApp(App):
         workspace = self.workspace
         if workspace is None:
             self._refresh_usage()
-            self.query_one("#settings", Static).update(Text("doc harness   /   choose a working folder", style="#b9c7d7"))
+            self.query_one("#settings", Static).update(Text("reading harness   /   choose a working folder", style="#b9c7d7"))
             self.query_one("#workspace-path", Static).update(Text(
                 f"Suggested folder: {self.suggested_root}", style="#aab8c7"
             ))
@@ -515,7 +535,7 @@ class ReadingApp(App):
             f"Sources ({len(sources)})  |  Tasks ({len(workspace.state['todos'])})  —  click to expand"
         )
         settings = workspace.state["settings"]
-        title = Text("doc harness", style="bold #bfc7d6")
+        title = Text("reading harness", style="bold #bfc7d6")
         title.append(
             f"   {settings['format'].upper()}  /  {workspace.state['stage']}",
             style="#b2bdcc",
@@ -735,7 +755,11 @@ class ReadingApp(App):
             return
         if event.value != self.workspace.state["settings"]["format"]:
             self.workspace.set_format(event.value)
-            self._chat_log("GUIDE", f"Output selected: {event.value.upper()}. The source texts will stay complete.")
+            if self.workspace.state.get("pending", {}).get("approved"):
+                self._chat_log("Assistant", f"**{event.value.upper()} selected.** "
+                               "Click Export to reuse the approved collection; no model call needed.")
+            else:
+                self._chat_log("GUIDE", f"Output selected: {event.value.upper()}. The source texts will stay complete.")
             self.refresh_panels()
 
     @on(ComposerInput.Submitted)
@@ -885,9 +909,13 @@ class ReadingApp(App):
             fmt = "pdf" if "pdf" in lower else "docx" if "word" in lower or "docx" in lower else "markdown"
             if fmt != self.workspace.state["settings"]["format"]:
                 self.workspace.set_format(fmt)
-                self._chat_log("GUIDE", f"Selected {fmt.upper()}. I'll prepare a draft for your approval first.")
-            if self.workspace.state.get("pending") and re.search(r"\b(?:export|save|exportar|salvar)\b", lower):
+            pending = self.workspace.state.get("pending")
+            if pending and pending.get("approved"):
                 self._start("export")
+            elif pending and re.search(r"\b(?:export|save|exportar|salvar)\b", lower):
+                self._start("export")
+            elif pending:
+                self._guide()
             elif self.workspace.sources():
                 self._start("build")
             else:
@@ -920,7 +948,13 @@ class ReadingApp(App):
             self._add_sources(extract_sources(argument))
         elif name == "compose" and argument.lower() in {"markdown", "pdf", "docx"}:
             self.workspace.set_format(argument.lower())
-            self._start("build") if self.workspace.sources() else self._guide()
+            pending = self.workspace.state.get("pending")
+            if pending and pending.get("approved"):
+                self._start("export")
+            elif pending:
+                self._guide()
+            else:
+                self._start("build") if self.workspace.sources() else self._guide()
         elif name == "review" and argument in {"approve", "export"}:
             self._command("/approve", "")
         elif name == "review" and argument and argument != "preview":
