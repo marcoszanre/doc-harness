@@ -18,6 +18,9 @@ The working folder and up to two current sources stay visible above the chat;
 the full source/task list is available in the collapsible detail strip.
 model-provided reasoning, *when available*, is collapsed beneath the answer.
 The full-width composer accepts pasted file paths, URLs, or ordinary requests.
+Paste **several sources at once**, one per line or separated by semicolons.
+Every submitted user message remains visible above the composer; assistant
+replies render Markdown rather than exposing formatting characters.
 Buttons cover common actions; the composer locks during generation and
 **Ctrl+X** or **Stop** requests an interruption.
 
@@ -54,13 +57,22 @@ https://example.org/article
 make a PDF
 ```
 
-Paste a path or link and press Enter; each source appears in the workspace.
+You can also paste the first two lines **together** and press Enter once;
+the input preserves both lines and adds both sources. Paste a path or link
+and press Enter; each source appears in the workspace.
 Choose PDF from the format selector or say "make a PDF". Use the **BUILD**,
 **PREVIEW**, and **EXPORT** buttons. Say "use folder C:\my-reading" to switch
 working folders, or "change the summary to focus on..." to revise the draft.
 To find additional links, say "find articles about ...", then "add result 1".
 The suggestion in the composer completes slash commands and local paths with
 **Tab** or **Right Arrow**; commands are optional.
+
+The footer displays **In** and **Out** token totals reported by Foundry for
+completed model requests. Output includes generated reasoning tokens when
+the model uses them. Totals persist in the working folder, but requests made
+before this counter existed cannot be recovered. If a stream stops before
+Foundry sends its final usage chunk, the footer marks the request as
+unavailable rather than inventing a count.
 
 Ask **"which sources are configured?"** (or **"quais sources estão
 configurados?"**) to see the actual files and URLs in the active workspace.

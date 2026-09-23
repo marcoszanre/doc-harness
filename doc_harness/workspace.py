@@ -41,6 +41,7 @@ class Workspace:
         self.state = json.loads(self.state_path.read_text(encoding="utf-8"))
         if self.state.get("version") != 1 or not isinstance(self.state.get("sources"), list):
             raise ValueError("Unsupported or damaged workspace state.")
+        self.state.setdefault("usage", {"input": 0, "output": 0, "requests": 0, "unreported": 0})
 
     @classmethod
     def create(cls, root: Path | str) -> Workspace:
@@ -59,6 +60,7 @@ class Workspace:
                     "sources": [],
                     "todos": [],
                     "chat": [],
+                    "usage": {"input": 0, "output": 0, "requests": 0, "unreported": 0},
                     "settings": {"format": "markdown", "target_words": 250, "max_file_kb": None},
                     "stage": "Ready",
                 },

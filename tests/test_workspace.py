@@ -44,3 +44,9 @@ class WorkspaceTests(unittest.TestCase):
         self.workspace.add_file(source)
         self.workspace.add_file(source)
         self.assertEqual(len(self.workspace.sources()), 1)
+
+    def test_existing_workspace_without_usage_is_migrated_in_memory(self):
+        self.workspace.state.pop("usage")
+        self.workspace.save()
+        reopened = Workspace(self.workspace.root)
+        self.assertEqual(reopened.state["usage"]["requests"], 0)

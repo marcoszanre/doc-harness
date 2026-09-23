@@ -1,6 +1,6 @@
 """Small, user-invocable workflow guides; no agent tool execution."""
 
-from importlib.resources import files
+from pathlib import Path
 
 SKILLS = {
     "guide": "Choose the next step from the current workspace state.",
@@ -13,4 +13,4 @@ SKILLS = {
 def read_skill(name: str) -> str:
     if name not in SKILLS:
         raise ValueError(f"Unknown skill: {name}. Available: {', '.join(SKILLS)}.")
-    return files("doc_harness").joinpath("skills", name, "SKILL.md").read_text(encoding="utf-8")
+    return (Path(__file__).resolve().parent / "skills" / name / "SKILL.md").read_text(encoding="utf-8")

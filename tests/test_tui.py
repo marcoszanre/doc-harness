@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from textual.containers import Vertical, VerticalScroll
+from textual.events import Paste
 from textual.widgets import Button, Collapsible, Input, Select, Static
 
 from doc_harness.foundry import Completion
@@ -14,7 +15,10 @@ class FakeFoundry:
     def complete(self, messages, emit, cancel):
         text = "# Weekly Reading\n\n## Ideas\n\n" + "A practical insight from the notes [1]. " * 46
         emit("answer", text)
-        return Completion(text)
+        result = Completion(text, input_tokens=120, output_tokens=230)
+        if hasattr(self, "on_usage"):
+            self.on_usage(result)
+        return result
 
     def close(self):
         pass
@@ -165,6 +169,70 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.pause()
                 self.assertEqual(app.workspace.state["settings"]["format"], "pdf")
 
+    async def test_multiline_paste_adds_multiple_sources_in_one_turn(self):
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / "first note.md"
+            second = Path(directory) / "second note.txt"
+            first.write_text("First", encoding="utf-8")
+            second.write_text("Second", encoding="utf-8")
+            app = ReadingApp(Path(directory) / "weekly")
+            async with app.run_test(size=(120, 36)) as pilot:
+                await pilot.pause()
+                composer = app.query_one("#composer", Input)
+                composer.post_message(Paste(
+                    f'"{first}"\n"{second}"\nhttps://example.org/article'
+                ))
+                await pilot.pause()
+                self.assertIn("; ", composer.value)
+                self.assertTrue(composer.value.endswith("https://example.org/article"))
+                await pilot.press("enter")
+                self.assertEqual(len(app.workspace.sources()), 3)
+                self.assertEqual(len(app.query("#thread .message-user")), 1)
+                self.assertIn("Sources (3)", str(app.query_one("#sources-bar", Static).render()))
+
+    async def test_every_submitted_message_is_visible_above_the_composer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = ReadingApp(Path(directory) / "weekly")
+            async with app.run_test(size=(100, 32)) as pilot:
+                await pilot.pause()
+                composer = app.query_one("#composer", Input)
+                composer.value = "https://example.org/article"
+                await pilot.press("enter")
+                composer.value = "/format pdf"
+                await pilot.press("enter")
+                messages = list(app.query("#thread .message-user"))
+                self.assertEqual(len(messages), 2)
+                self.assertIn("https://example.org/article", str(messages[0].render()))
+                self.assertIn("/format pdf", str(messages[1].render()))
+
+    async def test_reported_tokens_persist_in_bottom_counter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = ReadingApp(Path(directory) / "weekly")
+            async with app.run_test(size=(100, 32)) as pilot:
+                await pilot.pause()
+                app._record_usage(Completion("OK", input_tokens=123, output_tokens=45))
+                await pilot.pause()
+                footer = str(app.query_one("#usage", Static).render())
+                self.assertIn("In 123", footer)
+                self.assertIn("Out 45", footer)
+                self.assertEqual(app.workspace.state["usage"]["requests"], 1)
+                from doc_harness.workspace import Workspace
+
+                self.assertEqual(Workspace(app.workspace.root).state["usage"]["output"], 45)
+                app._record_usage(Completion("partial"))
+                self.assertIn("1 unavailable", str(app.query_one("#usage", Static).render()))
+
+    async def test_unreported_usage_is_not_displayed_as_zero(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = ReadingApp(Path(directory) / "weekly")
+            async with app.run_test(size=(100, 32)) as pilot:
+                await pilot.pause()
+                app._record_usage(Completion("partial"))
+                footer = str(app.query_one("#usage", Static).render())
+                self.assertIn("In --", footer)
+                self.assertIn("Out --", footer)
+                self.assertIn("unavailable", footer)
+
     async def test_sentence_with_quoted_windows_pdf_path_adds_only_that_file(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "Online Services Subprocessors List (2026-09-10).pdf"
@@ -211,6 +279,8 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                         break
                 self.assertEqual(app.workspace.state["stage"], "Approval required")
                 self.assertFalse(app.query_one("#preview", Button).disabled)
+                self.assertGreater(app.workspace.state["usage"]["input"], 0)
+                self.assertIn("Out ", str(app.query_one("#usage", Static).render()))
                 await pilot.click("#preview")
                 await pilot.click("#approve")
                 for _ in range(100):

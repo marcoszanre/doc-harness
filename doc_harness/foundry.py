@@ -18,11 +18,14 @@ EventSink = Callable[[str, str], None]
 @dataclass
 class Completion:
     content: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 class Foundry:
     def __init__(self, client: Any = None) -> None:
         self.credential = None
+        self.on_usage: Callable[[Completion], None] | None = None
         if client is None:
             key = os.getenv("AZURE_AI_API_KEY")
             if key:
@@ -50,24 +53,36 @@ class Foundry:
             "model": DEPLOYMENT,
             "messages": messages,
             "stream": True,
+            "stream_options": {"include_usage": True},
             "max_completion_tokens": 6000,
         }
         content: list[str] = []
         finish_reason = None
+        input_tokens: int | None = None
+        output_tokens: int | None = None
         with self.client.chat.completions.create(**request) as stream:
-            for chunk in stream:
-                if cancel.is_set():
-                    raise InterruptedError("Model generation was interrupted.")
-                for choice in chunk.choices:
-                    if choice.finish_reason:
-                        finish_reason = choice.finish_reason
-                    delta = choice.delta.model_dump(exclude_none=True)
-                    thought = delta.get("reasoning_content")
-                    if thought:
-                        emit("reasoning", thought)
-                    if delta.get("content"):
-                        content.append(delta["content"])
-                        emit("answer", delta["content"])
+            try:
+                for chunk in stream:
+                    if cancel.is_set():
+                        raise InterruptedError("Model generation was interrupted.")
+                    usage = getattr(chunk, "usage", None)
+                    if usage is not None:
+                        input_tokens = usage.prompt_tokens
+                        output_tokens = usage.completion_tokens
+                    for choice in chunk.choices:
+                        if choice.finish_reason:
+                            finish_reason = choice.finish_reason
+                        delta = choice.delta.model_dump(exclude_none=True)
+                        thought = delta.get("reasoning_content")
+                        if thought:
+                            emit("reasoning", thought)
+                        if delta.get("content"):
+                            content.append(delta["content"])
+                            emit("answer", delta["content"])
+            finally:
+                if self.on_usage is not None:
+                    self.on_usage(Completion("".join(content), input_tokens, output_tokens))
+        result = Completion("".join(content), input_tokens, output_tokens)
         if finish_reason in {"content_filter", "length"}:
             raise ValueError(
                 "Foundry filtered the response." if finish_reason == "content_filter"
@@ -75,4 +90,4 @@ class Foundry:
             )
         if not content:
             raise ValueError("The model returned no answer. Try again.")
-        return Completion("".join(content))
+        return result

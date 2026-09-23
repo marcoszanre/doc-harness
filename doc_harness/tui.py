@@ -14,7 +14,7 @@ from openai import OpenAIError
 from rich.markdown import Markdown as RichMarkdown
 from rich.text import Text
 from rich.theme import Theme
-from textual import work
+from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -23,14 +23,16 @@ from textual.widgets import Button, Collapsible, Input, ProgressBar, Select, Sta
 
 from .chat import chat
 from .exporters import export
-from .foundry import Foundry
+from .foundry import Completion, Foundry
+from .input_parser import extract_sources, only_sources
 from .skills import SKILLS, read_skill
 from .sources import web_search
 from .workflow import build, revise
 from .workspace import INPUT_SUFFIXES, Workspace
 
 HELP = (
-    "1. Paste a local file path or public URL and press Enter.\n"
+    "1. Paste one or several local file paths or public URLs and press Enter.\n"
+    "   Separate sources with semicolons, or paste them on separate lines.\n"
     "2. Choose a format. Use BUILD -> PREVIEW -> EXPORT.\n"
     "You can also say 'make a PDF', 'use folder C:\\my-reading', or 'change the summary ...'.\n"
     "Type / for autocomplete, or /skills for expert shortcuts. /commands lists every command."
@@ -60,6 +62,8 @@ class ComposerSuggester(Suggester):
 
     async def get_suggestion(self, value: str) -> str | None:
         if not value:
+            return None
+        if ";" in value or "\n" in value or re.search(r"\shttps?://", value):
             return None
         for prefix in ("/add ", "/add-file ", "/new ", "/open ", "/skill collect "):
             if value.lower().startswith(prefix) and value[len(prefix):]:
@@ -100,6 +104,19 @@ class ComposerSuggester(Suggester):
 class ComposerInput(Input):
     BINDINGS = [Binding("tab", "cursor_right", "Accept completion", show=False)]
 
+    def _on_paste(self, event: events.Paste) -> None:
+        lines = [line.strip() for line in event.text.splitlines() if line.strip()]
+        if len(lines) > 1:
+            text = "; ".join(lines)
+            if self.selection.is_empty:
+                self.insert_text_at_cursor(text)
+            else:
+                self.replace(text, *self.selection)
+            event.prevent_default()
+            event.stop()
+        else:
+            super()._on_paste(event)
+
 
 class ReadingApp(App):
     TITLE = "Doc Harness"
@@ -132,7 +149,9 @@ class ReadingApp(App):
     #composer-row { height: 3; padding: 0 2; background: #14161b; }
     #composer { width: 100%; background: #21252d; border: solid #4c5766; color: #f0f2f5; }
     #stop { color: #dab0ab; }
-    #hint { height: 1; padding: 0 2; color: #939eae; background: #14161b; }
+    #footer-row { height: 1; background: #14161b; }
+    #hint { width: 1fr; padding: 0 2; color: #939eae; }
+    #usage { width: auto; padding: 0 2; color: #b1c3d8; }
     """
     BINDINGS = [
         Binding("ctrl+x", "interrupt", "Stop", priority=True),
@@ -146,7 +165,7 @@ class ReadingApp(App):
         self.workspace = Workspace.create(root) if root is not None else None
         self.choosing_workspace = root is None
         self.awaiting_folder_path = False
-        self.pending_import: str | None = None
+        self.pending_imports: list[str] = []
         self.busy = False
         self.cancel = Event()
         self.suggestions: list[dict] = []
@@ -186,11 +205,13 @@ class ReadingApp(App):
                 yield Button("Stop", id="stop", disabled=True)
             with Horizontal(id="composer-row"):
                 yield ComposerInput(
-                    placeholder="Ask a question, or paste a file path or URL...",
+                    placeholder="Ask a question, or paste one or more file paths / URLs...",
                     suggester=ComposerSuggester(),
                     id="composer",
                 )
-            yield Static("Enter send  |  Tab complete  |  Ctrl+X stop  |  Ctrl+Q quit  |  F1 help", id="hint")
+            with Horizontal(id="footer-row"):
+                yield Static("Enter send  |  Tab complete  |  Ctrl+X stop  |  F1 help", id="hint")
+                yield Static(id="usage")
 
     def on_mount(self) -> None:
         self.console.push_theme(Theme({
@@ -232,13 +253,10 @@ class ReadingApp(App):
         self._chat_log(
             "Assistant", f"Working folder selected: `{self.workspace.root}`.\n\n{self._source_status()}"
         )
-        if self.pending_import:
-            pending = self.pending_import
-            self.pending_import = None
-            try:
-                self._add_source(pending)
-            except (ValueError, OSError) as error:
-                self._log("ERROR", str(error))
+        if self.pending_imports:
+            pending = self.pending_imports
+            self.pending_imports = []
+            self._add_sources(pending)
 
     def _source_status(self) -> str:
         if self.workspace is None:
@@ -302,20 +320,25 @@ class ReadingApp(App):
             )
         self._chat_log("GUIDE", message)
 
-    def _add_source(self, raw: str) -> None:
+    def _add_source(self, raw: str, announce: bool = True) -> bool:
         workspace = self._require_workspace()
         item = raw.strip().strip('"').strip("'")
         parsed = urlsplit(item)
         if parsed.scheme in {"http", "https"} and parsed.netloc:
             if item in workspace.state["sources"]:
-                self._chat_log("Assistant", "That link is already in your workspace.\n\n" + self._source_status())
-                return
+                if announce:
+                    self._chat_log("Assistant", "That link is already in your workspace.")
+                return False
             workspace.add_url(item)
             description = "link"
         elif (
             re.match(r"^(?:[A-Za-z]:[\\/]|[~.][\\/]|\\\\)", item)
             or Path(item).is_file()
         ):
+            existing = any(
+                source["kind"] == "file" and source["label"] == Path(item).name
+                for source in workspace.sources()
+            )
             try:
                 workspace.add_file(item)
             except FileNotFoundError as error:
@@ -330,12 +353,41 @@ class ReadingApp(App):
                 similar = difflib.get_close_matches(path.name, neighbors, n=3, cutoff=0.55)
                 hint = f" Did you mean: {', '.join(similar)}?" if similar else ""
                 raise ValueError(f"File not found: {path}.{hint}") from error
+            if existing:
+                if announce:
+                    self._chat_log("Assistant", f"`{Path(item).name}` is already in your workspace.")
+                return False
             description = "file"
         else:
             raise ValueError("Paste a local .pdf/.docx/.md/.txt/.html file path or a public http(s) URL.")
-        self._log("SYSTEM", f"Added {description}: {item}")
-        self._chat_log("Assistant", f"Added the {description}. {self._source_status()}\n\n"
-                       "You can add another, or say **make a PDF** when ready.")
+        if announce:
+            label = Path(item).name if description == "file" else item
+            self._chat_log(
+                "Assistant", f"Added **{label}**. {len(workspace.sources())} source(s) ready. "
+                "Add another, or press **Build** when ready.",
+            )
+        return True
+
+    def _add_sources(self, sources: list[str]) -> None:
+        if not sources:
+            raise ValueError("No file paths or public URLs were found in that message.")
+        added = 0
+        errors: list[str] = []
+        for source in sources:
+            try:
+                added += self._add_source(source, announce=False)
+            except (ValueError, OSError) as error:
+                errors.append(str(error))
+        if added:
+            message = f"Added **{added} of {len(sources)}** source(s). "
+            message += f"{len(self._require_workspace().sources())} total in this folder."
+            if errors:
+                message += f" **{len(errors)} failed**; see the error below."
+            self._chat_log("Assistant", message)
+        elif not errors:
+            self._chat_log("Assistant", "Those sources are already in this workspace.")
+        for error in errors:
+            self._log("ERROR", error)
 
     def _scroll_if_at_end(self) -> None:
         timeline = self.query_one("#timeline", VerticalScroll)
@@ -356,7 +408,8 @@ class ReadingApp(App):
 
     def _chat_log(self, label: str, message: str) -> Static:
         user = label == "YOU"
-        body = Static(RichMarkdown(message), classes="message" + (" message-user" if user else ""))
+        body = Static(Text(message) if user else RichMarkdown(message),
+                      classes="message" + (" message-user" if user else ""))
         self._scroll_if_at_end()
         self.query_one("#thread", Vertical).mount(
             Static(Text("You" if user else label.title()), classes="role" + (" role-user" if user else "")),
@@ -367,6 +420,7 @@ class ReadingApp(App):
     def refresh_panels(self) -> None:
         workspace = self.workspace
         if workspace is None:
+            self._refresh_usage()
             self.query_one("#settings", Static).update(Text("doc harness   /   choose a working folder", style="#b9c7d7"))
             self.query_one("#workspace-path", Static).update(Text(
                 f"Suggested folder: {self.suggested_root}", style="#aab8c7"
@@ -379,6 +433,7 @@ class ReadingApp(App):
             return
         self.query_one("#workspace-choice", Horizontal).display = False
         self.query_one("#actions", Horizontal).display = True
+        self._refresh_usage()
         sources = workspace.sources()
         self._last_sources = self._source_signature()
         source_lines = [f"{n}. {'File' if item['kind'] == 'file' else 'Link'}: {item['label']}"
@@ -432,6 +487,30 @@ class ReadingApp(App):
             self.busy or not pending or bool(pending["review"]["issues"])
         )
         picker.disabled = self.busy
+
+    def _refresh_usage(self) -> None:
+        totals = self.workspace.state["usage"] if self.workspace else None
+        if totals and totals["requests"] > totals["unreported"]:
+            label = f"In {totals['input']:,}  Out {totals['output']:,}"
+            if totals["unreported"]:
+                label += f"  ({totals['unreported']} unavailable)"
+        elif totals and totals["unreported"]:
+            label = f"In --  Out --  ({totals['unreported']} unavailable)"
+        else:
+            label = "In --  Out --  (next request)"
+        self.query_one("#usage", Static).update(Text(label))
+
+    def _record_usage(self, result: Completion) -> None:
+        workspace = self._require_workspace()
+        totals = workspace.state["usage"]
+        totals["requests"] += 1
+        if result.input_tokens is None or result.output_tokens is None:
+            totals["unreported"] += 1
+        else:
+            totals["input"] += result.input_tokens
+            totals["output"] += result.output_tokens
+        workspace.save()
+        self._refresh_usage()
 
     def _event(self, kind: str, text: str) -> None:
         if kind == "reasoning":
@@ -514,6 +593,7 @@ class ReadingApp(App):
         try:
             if kind in {"build", "refresh", "chat", "revise"}:
                 model = Foundry()
+                model.on_usage = lambda result: self.call_from_thread(self._record_usage, result)
             emit = lambda category, text: self.call_from_thread(self._event, category, text)
             if kind in {"build", "refresh"}:
                 result = build(self.workspace, model, emit, self.cancel, refresh=kind == "refresh")
@@ -600,12 +680,19 @@ class ReadingApp(App):
         if not text or self.busy:
             return
         self.query_one("#timeline", VerticalScroll).anchor()
+        candidates = extract_sources(text)
+        shown = (
+            "Add these sources:\n" + "\n".join(f"  {number}. {source}" for number, source in enumerate(candidates, 1))
+            if len(candidates) > 1 and only_sources(text, candidates) else text
+        )
+        self._chat_log("YOU", shown)
         try:
             if self.workspace is None:
                 self._handle_workspace_input(text)
                 self.refresh_panels()
                 return
-            if text.startswith("/") and not Path(text.strip('"').strip("'")).is_file():
+            if (text.startswith("/") and not only_sources(text, extract_sources(text))
+                    and not Path(text.strip('"').strip("'")).is_file()):
                 command, _, argument = text.partition(" ")
                 self._command(command.lower(), argument.strip().strip('"').strip("'"))
             else:
@@ -613,15 +700,6 @@ class ReadingApp(App):
         except (ValueError, OSError, RuntimeError) as error:
             self._log("ERROR", str(error))
         self.refresh_panels()
-
-    @staticmethod
-    def _embedded_file_path(text: str) -> str | None:
-        match = re.search(
-            r"(?i)([A-Z]:[\\/][^\r\n\"']+?\.(?:pdf|docx|md|txt|html|htm))"
-            r"(?=[\"'\s]|$)",
-            text,
-        )
-        return match.group(1).strip() if match else None
 
     @staticmethod
     def _plain_local_file(text: str) -> bool:
@@ -653,11 +731,18 @@ class ReadingApp(App):
         if folder:
             self._select_workspace(folder.group(1).strip().strip('"').strip("'"))
             return
-        embedded = self._embedded_file_path(value)
-        if urlsplit(value).scheme in {"http", "https"} or embedded or self._plain_local_file(value):
-            self.pending_import = embedded or value
-            self._chat_log("Assistant", "I have that source ready. Choose a working folder first; "
-                           "I will add it there after you select one.")
+        candidates = extract_sources(value)
+        if candidates and (only_sources(value, candidates) or re.search(
+            r"\b(?:add|include|import|adicionar|incluir|adicione|inclua|"
+            r"tbm|tambem|também|also)\b", lower,
+        )):
+            self.pending_imports.extend(
+                candidate for candidate in candidates if candidate not in self.pending_imports
+            )
+            self._chat_log(
+                "Assistant", f"I have **{len(self.pending_imports)} source(s)** ready. "
+                "Choose a working folder first; I will add them there.",
+            )
             return
         if self.awaiting_folder_path or re.match(r"^(?:[A-Z]:[\\/]|[~.][\\/]|\\\\)", value, re.I):
             self._select_workspace(value)
@@ -667,21 +752,16 @@ class ReadingApp(App):
     def _handle_text(self, text: str) -> None:
         value = text.strip().strip('"').strip("'")
         lower = value.lower()
-        if urlsplit(value).scheme in {"http", "https"} or re.match(
-            r"^(?:[A-Za-z]:[\\/]|[~.][\\/]|\\\\)", value
-        ):
-            self._add_source(value)
-            return
-        embedded = self._embedded_file_path(value)
-        if embedded and re.search(
+        candidates = extract_sources(value)
+        if candidates and (only_sources(value, candidates) or re.search(
             r"\b(?:add|include|import|adicionar|incluir|adicione|inclua|"
             r"tbm|tambem|também|also)\b",
             lower,
-        ):
-            self._add_source(embedded)
+        )):
+            self._add_sources(candidates)
             return
         if self._plain_local_file(value):
-            self._add_source(value)
+            self._add_sources([value])
             return
         attachment = re.match(
             r"^(?:please )?(?:add|include|import|adicionar|incluir)(?: this| esse| esta| o| a)?"
@@ -691,7 +771,7 @@ class ReadingApp(App):
         if attachment:
             candidate = attachment.group(1).strip().strip('"').strip("'")
             if urlsplit(candidate).scheme in {"http", "https"} or re.match(r"^[A-Za-z]:[\\/]", candidate):
-                self._add_source(candidate)
+                self._add_sources(extract_sources(candidate))
                 return
         folder = re.match(
             r"^(?:use|create|open|switch to|usar|criar|abrir)(?: a| my| uma)? "
@@ -758,7 +838,6 @@ class ReadingApp(App):
         if change and self.workspace.state.get("pending"):
             self._start("revise", change.group(1))
             return
-        self._chat_log("YOU", text)
         self._start("chat", text)
 
     def _run_skill(self, request: str) -> None:
@@ -767,7 +846,7 @@ class ReadingApp(App):
         if name not in SKILLS:
             raise ValueError(f"Available skills: {', '.join(SKILLS)}. Try /skill collect PATH.")
         if name == "collect" and argument:
-            self._add_source(argument)
+            self._add_sources(extract_sources(argument))
         elif name == "compose" and argument.lower() in {"markdown", "pdf", "docx"}:
             self.workspace.set_format(argument.lower())
             self._start("build") if self.workspace.sources() else self._guide()
@@ -797,7 +876,10 @@ class ReadingApp(App):
             self._select_workspace(Path(argument), create=False)
             self.suggestions = []
         elif command in {"/add", "/add-file", "/add-url"}:
-            self._add_source(argument)
+            candidates = extract_sources(argument)
+            if not candidates:
+                raise ValueError("Provide a local file path or public URL to add.")
+            self._add_sources(candidates)
         elif command == "/remove":
             self._log("SYSTEM", f"Removed: {self._require_workspace().remove_source(int(argument))}")
         elif command == "/search":
