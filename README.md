@@ -21,6 +21,10 @@ The full-width composer accepts pasted file paths, URLs, or ordinary requests.
 Paste **several sources at once**, one per line or separated by semicolons.
 Every submitted user message remains visible above the composer; assistant
 replies render Markdown rather than exposing formatting characters.
+The composer **wraps long text** and grows to a maximum of eight terminal
+rows. **Enter sends**; **Ctrl+Enter** on Windows or **Cmd+Enter** on macOS
+inserts a newline. **Shift+Enter** and the **New line** button provide
+alternatives when the terminal does not forward modified Enter keys.
 Buttons cover common actions; the composer locks during generation and
 **Ctrl+X** or **Stop** requests an interruption.
 

@@ -14,12 +14,13 @@ from openai import OpenAIError
 from rich.markdown import Markdown as RichMarkdown
 from rich.text import Text
 from rich.theme import Theme
-from textual import events, work
+from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.message import Message
 from textual.suggester import Suggester
-from textual.widgets import Button, Collapsible, Input, ProgressBar, Select, Static
+from textual.widgets import Button, Collapsible, ProgressBar, Select, Static, TextArea
 
 from .chat import chat
 from .clipboard import read_clipboard_text
@@ -33,7 +34,7 @@ from .workspace import INPUT_SUFFIXES, Workspace
 
 HELP = (
     "1. Paste one or several local file paths or public URLs and press Enter.\n"
-    "   Separate sources with semicolons, or paste them on separate lines.\n"
+    "   Paste several lines, or use Ctrl/Cmd+Enter or the New line button.\n"
     "2. Choose a format. Use BUILD -> PREVIEW -> EXPORT.\n"
     "You can also say 'make a PDF', 'use folder C:\\my-reading', or 'change the summary ...'.\n"
     "Type / for autocomplete, or /skills for expert shortcuts. /commands lists every command."
@@ -102,8 +103,47 @@ class ComposerSuggester(Suggester):
         return None
 
 
-class ComposerInput(Input):
-    BINDINGS = [Binding("tab", "cursor_right", "Accept completion", show=False)]
+class ComposerInput(TextArea):
+    class Submitted(Message):
+        def __init__(self, composer: ComposerInput, value: str) -> None:
+            super().__init__()
+            self.composer = composer
+            self.value = value
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(soft_wrap=True, tab_behavior="focus", highlight_cursor_line=False, **kwargs)
+
+    @property
+    def value(self) -> str:
+        return self.text
+
+    @value.setter
+    def value(self, text: str) -> None:
+        self.load_text(text)
+        self.move_cursor(self.document.end)
+
+    async def _on_key(self, event: events.Key) -> None:
+        if event.key == "enter":
+            event.prevent_default()
+            event.stop()
+            self.post_message(self.Submitted(self, self.text))
+        elif event.key in {"ctrl+enter", "super+enter", "meta+enter", "shift+enter", "alt+enter"}:
+            event.prevent_default()
+            event.stop()
+            self.insert("\n")
+        elif event.key == "tab":
+            event.prevent_default()
+            event.stop()
+            text = self.text
+            if "\n" not in text and self.selection.end == self.document.end:
+                suggestion = await ComposerSuggester().get_suggestion(text)
+                if suggestion and self.text == text:
+                    self.insert(suggestion[len(text):])
+
+    async def _on_paste(self, event: events.Paste) -> None:
+        await super()._on_paste(event)
+        event.prevent_default()
+        event.stop()
 
     def on_mouse_down(self, event: events.MouseDown) -> None:
         if event.button != 3:
@@ -117,17 +157,6 @@ class ComposerInput(Input):
             return
         self.focus()
         self.post_message(events.Paste(text))
-
-    def _on_paste(self, event: events.Paste) -> None:
-        lines = [line.strip() for line in event.text.splitlines() if line.strip()]
-        if lines:
-            text = "; ".join(lines) if len(lines) > 1 else event.text.splitlines()[0]
-            if self.selection.is_empty:
-                self.insert_text_at_cursor(text)
-            else:
-                self.replace(text, *self.selection)
-        event.prevent_default()
-        event.stop()
 
 
 class ReadingApp(App):
@@ -157,8 +186,8 @@ class ReadingApp(App):
     #actions Button { width: 11; margin-right: 1; background: #252b34; color: #c8d1dc; border: none; }
     #actions Button:focus { background: #3b4b64; }
     #format-picker { width: 16; margin-right: 1; }
-    #composer-row { height: 3; padding: 0 2; background: #14161b; }
-    #composer { width: 100%; background: #21252d; border: solid #4c5766; color: #f0f2f5; }
+    #composer-row { height: 3; max-height: 8; padding: 0 2; background: #14161b; }
+    #composer { width: 100%; height: 100%; background: #21252d; border: solid #4c5766; color: #f0f2f5; }
     #stop { color: #dab0ab; }
     #footer-row { height: 1; background: #14161b; }
     #hint { width: 1fr; padding: 0 2; color: #939eae; }
@@ -213,15 +242,15 @@ class ReadingApp(App):
                 yield Button("Build", id="build")
                 yield Button("Preview", id="preview", disabled=True)
                 yield Button("Export", id="approve", disabled=True)
+                yield Button("New line", id="newline")
                 yield Button("Stop", id="stop", disabled=True)
             with Horizontal(id="composer-row"):
                 yield ComposerInput(
-                    placeholder="Ask a question, or paste one or more file paths / URLs...",
-                    suggester=ComposerSuggester(),
+                    placeholder="Ask a question or paste file paths / URLs...",
                     id="composer",
                 )
             with Horizontal(id="footer-row"):
-                yield Static("Enter send  |  Tab complete  |  Ctrl+R restart  |  Ctrl+X stop  |  F1 help", id="hint")
+                yield Static("Enter send  |  Ctrl/Cmd+Enter newline  |  Tab complete  |  F1 help", id="hint")
                 yield Static(id="usage")
 
     def on_mount(self) -> None:
@@ -231,8 +260,22 @@ class ReadingApp(App):
         }))
         self.refresh_panels()
         self._guide()
-        self.query_one("#composer", Input).focus()
+        self.query_one("#composer", ComposerInput).focus()
         self.set_interval(2.0, self._sync_folder_view)
+
+    def _resize_composer(self) -> None:
+        composer = self.query_one("#composer", ComposerInput)
+        columns = max(16, composer.size.width - 3)
+        rows = sum(
+            max(1, (len(line) + columns - 1) // columns)
+            for line in composer.text.split("\n")
+        )
+        height = min(8, max(3, rows + 2))
+        self.query_one("#composer-row", Horizontal).styles.height = height
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        if event.text_area.id == "composer":
+            self._resize_composer()
 
     def _source_signature(self) -> tuple:
         if self.workspace is None:
@@ -486,6 +529,7 @@ class ReadingApp(App):
             self.busy or not pending or bool(pending["review"]["issues"])
         )
         picker.disabled = self.busy
+        self.query_one("#newline", Button).disabled = self.busy
 
     def _refresh_usage(self) -> None:
         totals = self.workspace.state["usage"] if self.workspace else None
@@ -564,7 +608,7 @@ class ReadingApp(App):
             self._chat_log("Assistant", "_Working..._")
             if kind in {"build", "refresh", "chat", "revise"} else None
         )
-        self.query_one("#composer", Input).disabled = True
+        self.query_one("#composer", ComposerInput).disabled = True
         self.query_one("#stop", Button).disabled = False
         progress = self.query_one("#progress", ProgressBar)
         progress.display = kind in {"build", "refresh", "export"}
@@ -575,9 +619,9 @@ class ReadingApp(App):
     def _finished(self, message: str, failed: bool = False) -> None:
         self.busy = False
         self._flush_answer()
-        self.query_one("#composer", Input).disabled = False
+        self.query_one("#composer", ComposerInput).disabled = False
         self.query_one("#stop", Button).disabled = True
-        self.query_one("#composer", Input).focus()
+        self.query_one("#composer", ComposerInput).focus()
         self.query_one("#progress", ProgressBar).display = False
         if self._live_answer and not self.answer:
             self._live_answer.update(RichMarkdown("_No model response._" if failed else "_Completed._"))
@@ -656,13 +700,17 @@ class ReadingApp(App):
                 self.awaiting_folder_path = True
                 self._chat_log("Assistant", "Paste the full path to the folder you want to use. "
                                "I will create it if it does not exist.")
-                self.query_one("#composer", Input).focus()
+                self.query_one("#composer", ComposerInput).focus()
             elif event.button.id == "build":
                 self._start("build")
             elif event.button.id == "preview":
                 self._command("/preview", "")
             elif event.button.id == "approve":
                 self._start("export")
+            elif event.button.id == "newline":
+                composer = self.query_one("#composer", ComposerInput)
+                composer.insert("\n")
+                composer.focus()
             elif event.button.id == "stop":
                 self.action_interrupt()
         except (ValueError, OSError, RuntimeError) as error:
@@ -679,9 +727,10 @@ class ReadingApp(App):
             self._chat_log("GUIDE", f"Output selected: {event.value.upper()}. The source texts will stay complete.")
             self.refresh_panels()
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
+    @on(ComposerInput.Submitted)
+    def on_composer_submitted(self, event: ComposerInput.Submitted) -> None:
         text = event.value.strip()
-        event.input.value = ""
+        event.composer.value = ""
         if not text or self.busy:
             return
         self.query_one("#timeline", VerticalScroll).anchor()

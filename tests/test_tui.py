@@ -5,9 +5,10 @@ from unittest.mock import patch
 
 from textual.containers import Vertical, VerticalScroll
 from textual.events import Paste
-from textual.widgets import Button, Collapsible, Input, Select, Static
+from textual.widgets import Button, Collapsible, Select, Static
 
 from doc_harness.foundry import Completion
+from doc_harness.tui import ComposerInput as Input
 from doc_harness.tui import ComposerSuggester, ReadingApp
 
 
@@ -41,6 +42,45 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                         self.assertTrue(app.query_one("#workspace-details", Collapsible).collapsed)
                         await pilot.press("a")
                         self.assertEqual(composer.value, "a")
+
+    async def test_long_input_soft_wraps_and_composer_grows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = ReadingApp(Path(directory) / "weekly")
+            async with app.run_test(size=(90, 28)) as pilot:
+                await pilot.pause()
+                composer = app.query_one("#composer", Input)
+                composer.value = "https://example.org/" + ("a" * 190)
+                await pilot.pause()
+                self.assertTrue(composer.soft_wrap)
+                self.assertGreater(app.query_one("#composer-row").region.height, 3)
+                self.assertLessEqual(app.query_one("#composer-row").region.height, 8)
+
+    async def test_modified_enter_inserts_newline_but_enter_sends(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = ReadingApp(Path(directory) / "weekly")
+            async with app.run_test(size=(100, 32)) as pilot:
+                await pilot.pause()
+                composer = app.query_one("#composer", Input)
+                composer.value = "https://example.org/one"
+                await pilot.press("ctrl+enter")
+                self.assertEqual(composer.value, "https://example.org/one\n")
+                await pilot.press("super+enter")
+                self.assertEqual(composer.value, "https://example.org/one\n\n")
+                composer.value = "https://example.org/one"
+                await pilot.press("enter")
+                self.assertEqual(composer.value, "")
+                self.assertEqual(len(app.workspace.sources()), 1)
+
+    async def test_newline_button_inserts_line_break_and_returns_focus(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = ReadingApp(Path(directory) / "weekly")
+            async with app.run_test(size=(100, 32)) as pilot:
+                await pilot.pause()
+                composer = app.query_one("#composer", Input)
+                composer.value = "first line"
+                await pilot.click("#newline")
+                self.assertEqual(composer.value, "first line\n")
+                self.assertIs(app.focused, composer)
 
     async def test_first_launch_asks_before_creating_a_workspace(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -233,7 +273,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                     f'"{first}"\n"{second}"\nhttps://example.org/article'
                 ))
                 await pilot.pause()
-                self.assertIn("; ", composer.value)
+                self.assertIn("\n", composer.value)
                 self.assertTrue(composer.value.endswith("https://example.org/article"))
                 await pilot.press("enter")
                 self.assertEqual(len(app.workspace.sources()), 3)
