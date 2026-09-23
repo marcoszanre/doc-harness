@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Event
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from .foundry import Foundry
 from .sources import IndexedSource, index_sources
@@ -39,7 +40,13 @@ def review(introduction: str, sources: list[IndexedSource], target_words: int) -
 
 def source_title(source: IndexedSource) -> str:
     heading = re.search(r"(?m)^#\s+(.+)$", source.content[:1500])
-    return (heading.group(1).strip() if heading else source.label).replace("\n", " ")[:120]
+    if heading:
+        title = heading.group(1)
+    elif urlsplit(source.reference).scheme in {"http", "https"}:
+        title = unquote(urlsplit(source.reference).path.rstrip("/").split("/")[-1]).replace("-", " ")
+    else:
+        title = Path(source.label).stem.replace("-", " ").replace("_", " ")
+    return " ".join(title.split())[:90]
 
 
 def compose(introduction: str, sources: list[IndexedSource]) -> str:

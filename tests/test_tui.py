@@ -57,6 +57,21 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(app.query_one("#workspace-choice").display)
                 self.assertIn(str(suggested.resolve()), str(app.query_one("#workspace-path", Static).render()))
 
+    async def test_new_folder_is_initialized_at_the_exact_selected_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            selected = Path(directory) / "my new folder"
+            app = ReadingApp(None, suggested_root=Path(directory) / "weekly")
+            async with app.run_test(size=(110, 36)) as pilot:
+                await pilot.pause()
+                await pilot.click("#new-folder")
+                app.query_one("#composer", Input).value = f'"{selected}"'
+                await pilot.press("enter")
+                self.assertEqual(app.workspace.root, selected.resolve())
+                for name in ("inputs", "cache", "output"):
+                    self.assertTrue((selected / name).is_dir())
+                self.assertTrue((selected / ".doc-harness.json").is_file())
+                self.assertIn(str(selected.resolve()), str(app.query_one("#workspace-path", Static).render()))
+
     async def test_existing_sources_are_fixed_above_scrolling_chat(self):
         with tempfile.TemporaryDirectory() as directory:
             suggested = Path(directory) / "weekly"
@@ -73,13 +88,13 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                 for number in range(25):
                     app._chat_log("Assistant", f"Message {number}.")
                 await pilot.pause()
-                sources = app.query_one("#sources-bar", Static)
+                sources = app.query_one("#workspace-details", Collapsible)
                 timeline = app.query_one("#timeline", VerticalScroll)
                 self.assertTrue(sources.is_on_screen)
                 self.assertLess(sources.region.y, timeline.region.y)
-                self.assertIn("Sources (2)", str(sources.render()))
+                self.assertIn("Sources (2)", sources.title)
 
-    async def test_dropped_file_refreshes_the_fixed_source_bar(self):
+    async def test_dropped_file_refreshes_the_fixed_source_count(self):
         with tempfile.TemporaryDirectory() as directory:
             app = ReadingApp(Path(directory) / "weekly")
             async with app.run_test(size=(100, 28)) as pilot:
@@ -87,8 +102,8 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                 (app.workspace.inputs / "dropped.md").write_text("A new source.", encoding="utf-8")
                 app._sync_folder_view()
                 await pilot.pause()
-                self.assertIn("Sources (1)", str(app.query_one("#sources-bar", Static).render()))
-                self.assertIn("dropped.md", str(app.query_one("#sources-bar", Static).render()))
+                self.assertIn("Sources (1)", app.query_one("#workspace-details", Collapsible).title)
+                self.assertIn("dropped.md", str(app.query_one("#sources", Static).render()))
 
     async def test_long_conversation_scrolls_and_renders_markdown(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -122,7 +137,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(app.busy)
                     self.assertIn("article.pdf", app._source_status())
                     self.assertIn("https://example.org/post", app._source_status())
-                    self.assertIn("Sources (2)", str(app.query_one("#sources-bar", Static).render()))
+                    self.assertIn("Sources (2)", app.query_one("#workspace-details", Collapsible).title)
 
     async def test_autocomplete_commands_and_local_paths(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -142,6 +157,41 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.pause(0.1)
                 await pilot.press("tab")
                 self.assertEqual(composer.value, "/build")
+
+    async def test_right_click_pastes_clipboard_into_composer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = ReadingApp(Path(directory) / "weekly")
+            with patch("doc_harness.tui.read_clipboard_text", return_value="https://example.org/article") as clipboard:
+                async with app.run_test(size=(100, 32)) as pilot:
+                    await pilot.pause()
+                    await pilot.click("#composer", button=3)
+                    await pilot.pause()
+                    clipboard.assert_called_once()
+                    self.assertEqual(app.query_one("#composer", Input).value, "https://example.org/article")
+
+    async def test_right_click_pastes_multiple_copied_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / "first.md"
+            second = Path(directory) / "second.txt"
+            first.write_text("First", encoding="utf-8")
+            second.write_text("Second", encoding="utf-8")
+            app = ReadingApp(Path(directory) / "weekly")
+            with patch("doc_harness.tui.read_clipboard_text", return_value=f'"{first}"\n"{second}"'):
+                async with app.run_test(size=(100, 32)) as pilot:
+                    await pilot.pause()
+                    await pilot.click("#composer", button=3)
+                    await pilot.pause()
+                    await pilot.press("enter")
+                    self.assertEqual(len(app.workspace.sources()), 2)
+
+    async def test_restart_command_returns_to_workspace_chooser(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = ReadingApp(Path(directory) / "weekly")
+            async with app.run_test(size=(100, 32)) as pilot:
+                await pilot.pause()
+                app.query_one("#composer", Input).value = "/restart"
+                await pilot.press("enter")
+            self.assertEqual(app.return_value, "restart")
 
     async def test_pasted_path_url_and_wrong_command_are_understood(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -188,7 +238,7 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.press("enter")
                 self.assertEqual(len(app.workspace.sources()), 3)
                 self.assertEqual(len(app.query("#thread .message-user")), 1)
-                self.assertIn("Sources (3)", str(app.query_one("#sources-bar", Static).render()))
+                self.assertIn("Sources (3)", app.query_one("#workspace-details", Collapsible).title)
 
     async def test_every_submitted_message_is_visible_above_the_composer(self):
         with tempfile.TemporaryDirectory() as directory:

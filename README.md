@@ -14,8 +14,8 @@ The only model/provider is **DeepSeek-V4-Pro on Azure Foundry**.
 The full-screen Textual interface runs in the terminal's interactive/raw mode;
 it is not a cooked `input()` prompt. It focuses on **one full-width scrolling
 conversation** with rendered Markdown and compact, unobtrusive progress lines.
-The working folder and up to two current sources stay visible above the chat;
-the full source/task list is available in the collapsible detail strip.
+The working-folder path stays visible above the chat; sources and tasks live
+behind a **single collapsed count** so long URLs do not dominate the screen.
 model-provided reasoning, *when available*, is collapsed beneath the answer.
 The full-width composer accepts pasted file paths, URLs, or ordinary requests.
 Paste **several sources at once**, one per line or separated by semicolons.
@@ -77,9 +77,14 @@ unavailable rather than inventing a count.
 Ask **"which sources are configured?"** (or **"quais sources estão
 configurados?"**) to see the actual files and URLs in the active workspace.
 This inventory is read directly from the folder, not guessed by the model.
-Open the fixed **Sources and tasks** strip to inspect them without leaving
+Open the fixed **Sources and tasks** control to inspect them without leaving
 the conversation. Use the mouse wheel or Page Up/Page Down
 to scroll; incoming output follows the bottom until you scroll up to read.
+
+**Right-click the composer on Windows** to paste clipboard text or files copied
+in File Explorer. Ctrl+V and Shift+Insert remain available if your terminal
+intercepts right-click to show its own context menu. This behavior belongs to
+your Windows Terminal mouse settings, not to your workspace.
 
 The approved file appears in your folder's `output/` directory. Its summary,
 navigation, full article texts, and source references are all in that **one
@@ -130,7 +135,7 @@ shortcuts; `/commands` shows the complete list in the UI:
 | Output | `/format markdown|pdf|docx`, `/words N` (summary), `/limit KB|off` |
 | Human review | `/build`, `/refresh`, `/preview`, `/revise FEEDBACK`, `/approve`, `/reject` |
 | Manual tasks | `/todo TITLE`, `/todos`, `/done N` |
-| Help / stop | `/help` or **F1**, `/cancel` or **Ctrl+X**, `/quit` or **Ctrl+Q** |
+| Help / restart / stop | `/help` or **F1**, `/restart` or **Ctrl+R**, `/cancel` or **Ctrl+X**, `/quit` or **Ctrl+Q** |
 
 Embedded workflow skills are available with `/skills`: `guide`, `collect`,
 `compose`, and `review`. Experts can invoke `/skill collect PATH_OR_URL`,
@@ -169,6 +174,17 @@ loopback, and reserved addresses are rejected (including redirects); this
 is not a hardened public-server sandbox.
 Your extracted text is sent to Foundry, search queries go to Tavily when you
 use `/search`, and approved documents stay local.
+
+`/restart` returns to the working-folder chooser and clears the visible UI
+session; it does **not** remove workspaces, sources, or approved files. Choosing
+a folder shows its exact absolute path and whether it was created or opened.
+For Word output, the navigation pane contains only the edition sections and
+one heading per article; article-internal headings are readable subheadings
+without flooding navigation. The Word table of contents uses direct links to
+those article headings. When a blog exposes an article-body container, the
+extractor omits surrounding Share, Tags, and Related posts UI. The next build
+refreshes older cached extraction automatically. Existing exported files are
+not overwritten: use Build -> Preview -> Export again for the improved DOCX.
 
 ## Test and contribute
 

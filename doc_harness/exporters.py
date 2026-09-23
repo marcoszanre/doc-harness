@@ -15,7 +15,8 @@ from docx import Document
 from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Inches, Pt
+from docx.enum.style import WD_STYLE_TYPE
+from docx.shared import Inches, Pt, RGBColor
 from reportlab.lib import colors
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.pdfbase import pdfmetrics
@@ -43,6 +44,25 @@ def lines(markdown: str):
 
 def plain(text: str) -> str:
     return re.sub(r"(?<!\w)[*`_]+|[*`_]+(?!\w)", "", text)
+
+
+def word_blocks(markdown: str):
+    paragraph: list[str] = []
+    for line in markdown.splitlines():
+        text = line.strip()
+        heading = re.match(r"^(#{1,3})\s+(.+)$", text)
+        if not text or heading or text.startswith(("- ", "* ")):
+            if paragraph:
+                yield "paragraph", " ".join(paragraph)
+                paragraph = []
+            if heading:
+                yield "heading", heading.group(2)
+            elif text.startswith(("- ", "* ")):
+                yield "bullet", text[2:]
+        else:
+            paragraph.append(text)
+    if paragraph:
+        yield "paragraph", " ".join(paragraph)
 
 
 def _temp_output(path: Path, create) -> None:
@@ -81,11 +101,15 @@ def _word_link(paragraph, label: str, destination: str, external: bool = False) 
     paragraph._p.append(link)
 
 
-def _word_body(doc: Document, text: str, link_citations: bool = False) -> None:
-    for kind, level, content in lines(text):
+def _word_body(
+    doc: Document, text: str, link_citations: bool = False, skip_title: str = "",
+) -> None:
+    for kind, content in word_blocks(text):
         content = plain(content)
         if kind == "heading":
-            paragraph = doc.add_heading(level=level)
+            if content.casefold() == skip_title.casefold():
+                continue
+            paragraph = doc.add_paragraph(style="Article Subheading")
         elif kind == "bullet":
             paragraph = doc.add_paragraph(style="List Bullet")
         else:
@@ -106,10 +130,43 @@ def write_docx(
 ) -> None:
     doc = Document()
     section = doc.sections[0]
+    section.page_width = Inches(8.5)
+    section.page_height = Inches(11)
     section.top_margin = Inches(0.85)
     section.bottom_margin = Inches(0.85)
-    doc.styles["Normal"].font.name = "Aptos"
-    doc.styles["Normal"].font.size = Pt(10.5)
+    section.left_margin = Inches(0.95)
+    section.right_margin = Inches(0.95)
+    normal = doc.styles["Normal"]
+    normal.font.name = "Arial"
+    normal.font.size = Pt(10.5)
+    normal.font.color.rgb = RGBColor(35, 43, 52)
+    normal.paragraph_format.line_spacing = 1.16
+    normal.paragraph_format.space_after = Pt(7)
+    for name, size in (("Title", 21), ("Heading 1", 16), ("Heading 2", 13)):
+        style = doc.styles[name]
+        style.font.name = "Arial"
+        style.font.size = Pt(size)
+        style.font.bold = True
+        style.font.color.rgb = RGBColor(30, 46, 65)
+        style.paragraph_format.space_before = Pt(16)
+        style.paragraph_format.space_after = Pt(8)
+        style.paragraph_format.keep_with_next = True
+    subheading = doc.styles.add_style("Article Subheading", WD_STYLE_TYPE.PARAGRAPH)
+    subheading.base_style = normal
+    subheading.font.bold = True
+    subheading.font.size = Pt(11.5)
+    subheading.font.color.rgb = RGBColor(40, 58, 76)
+    subheading.paragraph_format.space_before = Pt(12)
+    subheading.paragraph_format.space_after = Pt(5)
+    subheading.paragraph_format.keep_with_next = True
+    compat = doc.settings.element.find(qn("w:compat"))
+    if compat is not None:
+        for setting in compat.findall(qn("w:compatSetting")):
+            if setting.get(qn("w:name")) == "compatibilityMode":
+                setting.set(qn("w:val"), "15")
+    zoom = doc.settings.element.find(qn("w:zoom"))
+    if zoom is not None:
+        zoom.set(qn("w:percent"), "100")
     if sources is None:
         _word_body(doc, markdown)
     else:
@@ -118,11 +175,16 @@ def write_docx(
         _word_body(doc, summary, link_citations=True)
         doc.add_heading("Contents", 1)
         for number, source in enumerate(sources, 1):
-            paragraph = doc.add_paragraph(style="List Bullet")
-            _word_link(paragraph, f"Source {number}: {source_title(source)}", f"source-{number}")
-        doc.add_heading("Complete Articles", 1)
+            paragraph = doc.add_paragraph()
+            paragraph.paragraph_format.left_indent = Inches(0.2)
+            paragraph.add_run(f"{number:02}.  ").bold = True
+            _word_link(paragraph, source_title(source), f"source-{number}")
+        articles = doc.add_heading("Complete Articles", 1)
+        articles.paragraph_format.page_break_before = True
         for number, source in enumerate(sources, 1):
             heading = doc.add_heading(f"Source {number}: {source_title(source)}", 2)
+            if number > 1:
+                heading.paragraph_format.page_break_before = True
             start = OxmlElement("w:bookmarkStart")
             start.set(qn("w:id"), str(number))
             start.set(qn("w:name"), f"source-{number}")
@@ -130,13 +192,14 @@ def write_docx(
             end.set(qn("w:id"), str(number))
             heading._p.insert(1, start)
             heading._p.append(end)
-            _word_body(doc, source.content)
-        doc.add_heading("Original Sources", 1)
+            _word_body(doc, source.content, skip_title=source_title(source))
+        references = doc.add_heading("Original Sources", 1)
+        references.paragraph_format.page_break_before = True
         for number, source in enumerate(sources, 1):
-            paragraph = doc.add_paragraph(style="List Number")
+            paragraph = doc.add_paragraph()
+            paragraph.add_run(f"{number:02}.  {source_title(source)}  -  ")
             if urlsplit(source.reference).scheme in {"http", "https"}:
-                _word_link(paragraph, f"External: {source_title(source)}", source.reference, external=True)
-                paragraph.add_run(f" — {source.reference}")
+                _word_link(paragraph, "Open original article", source.reference, external=True)
             else:
                 paragraph.add_run(f"Local input: inputs/{source.label}")
     doc.save(path)

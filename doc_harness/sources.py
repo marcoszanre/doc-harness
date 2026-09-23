@@ -27,6 +27,7 @@ from .workspace import Workspace
 
 MAX_DOWNLOAD = 2_000_000
 MAX_EXTRACTED_CHARS = 2_000_000
+EXTRACTION_CACHE_VERSION = 2
 HEADERS = {"User-Agent": "DocHarness/0.1 (weekly reading list)", "Accept": "text/html,text/plain,text/markdown,application/pdf"}
 
 
@@ -91,7 +92,62 @@ class HtmlToMarkdown(HTMLParser):
         return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+class ArticleBody(HTMLParser):
+    VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "wbr"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.body = HtmlToMarkdown()
+        self.depth = 0
+        self.title_depth = 0
+        self.title_parts: list[str] = []
+        self.title_seen = False
+        self.found = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "h1" and not self.title_seen:
+            self.title_seen = True
+            self.title_depth = 1
+        elif self.title_depth and tag not in self.VOID:
+            self.title_depth += 1
+        if not self.depth and tag == "div" and "entry-content" in (dict(attrs).get("class") or "").split():
+            self.depth = 1
+            self.found = True
+            return
+        if self.depth:
+            self.body.handle_starttag(tag, attrs)
+            if tag not in self.VOID:
+                self.depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.title_depth:
+            self.title_depth -= 1
+        if self.depth:
+            if self.depth > 1:
+                self.body.handle_endtag(tag)
+            self.depth -= 1
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self.depth:
+            self.body.handle_starttag(tag, attrs)
+
+    def handle_data(self, data: str) -> None:
+        if self.title_depth:
+            self.title_parts.append(data)
+        if self.depth:
+            self.body.handle_data(data)
+
+    def text(self) -> str:
+        body = self.body.text()
+        title = " ".join("".join(self.title_parts).split())
+        return f"# {title}\n\n{body}" if title and not body.startswith(f"# {title}") else body
+
+
 def html_to_markdown(raw: str) -> str:
+    article = ArticleBody()
+    article.feed(raw)
+    if article.found:
+        return article.text()
     parser = HtmlToMarkdown()
     parser.feed(raw)
     return parser.text()
@@ -197,7 +253,9 @@ def index_sources(workspace: Workspace, emit, cancel: Event, refresh: bool = Fal
                 reference = label
             else:
                 url = item["url"]
-                cache = workspace.cache / (hashlib.sha256(url.encode()).hexdigest() + ".md")
+                cache = workspace.cache / (
+                    f"{hashlib.sha256(url.encode()).hexdigest()}-v{EXTRACTION_CACHE_VERSION}.md"
+                )
                 if cache.is_file() and not refresh:
                     text = cache.read_text(encoding="utf-8")
                 else:

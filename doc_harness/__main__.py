@@ -18,8 +18,12 @@ def main() -> int:
     args = parser.parse_args()
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         parser.error("The raw terminal UI needs an interactive TTY; launch it in a terminal.")
-    ReadingApp(args.workspace).run()
-    return 0
+    workspace = args.workspace
+    while True:
+        result = ReadingApp(workspace).run()
+        if result != "restart":
+            return 0
+        workspace = None
 
 
 if __name__ == "__main__":

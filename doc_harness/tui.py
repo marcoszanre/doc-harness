@@ -22,6 +22,7 @@ from textual.suggester import Suggester
 from textual.widgets import Button, Collapsible, Input, ProgressBar, Select, Static
 
 from .chat import chat
+from .clipboard import read_clipboard_text
 from .exporters import export
 from .foundry import Completion, Foundry
 from .input_parser import extract_sources, only_sources
@@ -43,7 +44,7 @@ ADVANCED_HELP = (
     "/words N  /limit KB|off  /build  /refresh  /preview  /revise FEEDBACK\n"
     "/approve  /reject  /todos  /todo TITLE  /done N\n"
     "/skill collect|compose|review [argument]  /skills\n"
-    "/status  /cancel (Ctrl+X)  /quit (Ctrl+Q)\n"
+    "/status  /restart  /cancel (Ctrl+X)  /quit (Ctrl+Q)\n"
     "Any other message goes to the chat assistant. The composer locks while generating."
 )
 
@@ -54,7 +55,7 @@ class ComposerSuggester(Suggester):
         "/format docx", "/format markdown", "/help", "/search ", "/pick ",
         "/refresh", "/revise ", "/new ", "/open ", "/remove ", "/words ",
         "/limit ", "/todo ", "/todos", "/done ", "/skills", "/skill collect ",
-        "/skill compose pdf", "/skill review ", "/commands", "/status", "/quit",
+        "/skill compose pdf", "/skill review ", "/commands", "/status", "/restart", "/quit",
     )
 
     def __init__(self) -> None:
@@ -104,18 +105,29 @@ class ComposerSuggester(Suggester):
 class ComposerInput(Input):
     BINDINGS = [Binding("tab", "cursor_right", "Accept completion", show=False)]
 
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        if event.button != 3:
+            return
+        event.prevent_default()
+        event.stop()
+        try:
+            text = read_clipboard_text()
+        except (OSError, RuntimeError, ValueError) as error:
+            self.app.notify(str(error), severity="warning")
+            return
+        self.focus()
+        self.post_message(events.Paste(text))
+
     def _on_paste(self, event: events.Paste) -> None:
         lines = [line.strip() for line in event.text.splitlines() if line.strip()]
-        if len(lines) > 1:
-            text = "; ".join(lines)
+        if lines:
+            text = "; ".join(lines) if len(lines) > 1 else event.text.splitlines()[0]
             if self.selection.is_empty:
                 self.insert_text_at_cursor(text)
             else:
                 self.replace(text, *self.selection)
-            event.prevent_default()
-            event.stop()
-        else:
-            super()._on_paste(event)
+        event.prevent_default()
+        event.stop()
 
 
 class ReadingApp(App):
@@ -125,7 +137,6 @@ class ReadingApp(App):
     #body { height: 1fr; min-height: 0; }
     #settings { height: 1; padding: 0 2; background: #191c22; color: #bec6d0; }
     #workspace-path { height: 1; padding: 0 2; background: #14161b; color: #9eabbc; }
-    #sources-bar { height: 2; padding: 0 2; background: #171a1f; color: #b3c0cf; }
     #progress { height: 1; display: none; }
     #timeline { height: 1fr; background: #101114; scrollbar-size: 1 1; }
     #thread { width: 100%; height: auto; padding: 1 3; }
@@ -155,6 +166,7 @@ class ReadingApp(App):
     """
     BINDINGS = [
         Binding("ctrl+x", "interrupt", "Stop", priority=True),
+        Binding("ctrl+r", "restart", "Restart", priority=True),
         Binding("ctrl+q", "quit", "Quit", priority=True),
         Binding("f1", "help", "Help"),
     ]
@@ -182,7 +194,6 @@ class ReadingApp(App):
         with Vertical(id="body"):
             yield Static(id="settings")
             yield Static(id="workspace-path")
-            yield Static(id="sources-bar")
             with Collapsible(title="View sources and tasks", collapsed=True, id="workspace-details"):
                 yield Static(id="sources")
                 yield Static(id="tasks")
@@ -210,7 +221,7 @@ class ReadingApp(App):
                     id="composer",
                 )
             with Horizontal(id="footer-row"):
-                yield Static("Enter send  |  Tab complete  |  Ctrl+X stop  |  F1 help", id="hint")
+                yield Static("Enter send  |  Tab complete  |  Ctrl+R restart  |  Ctrl+X stop  |  F1 help", id="hint")
                 yield Static(id="usage")
 
     def on_mount(self) -> None:
@@ -246,12 +257,17 @@ class ReadingApp(App):
         return self.workspace
 
     def _select_workspace(self, folder: Path | str, create: bool = True) -> None:
+        target = Path(folder).expanduser().resolve()
+        existed = (target / ".doc-harness.json").is_file()
         self.workspace = Workspace.create(folder) if create else Workspace(folder)
         self.choosing_workspace = False
         self.awaiting_folder_path = False
         self.refresh_panels()
         self._chat_log(
-            "Assistant", f"Working folder selected: `{self.workspace.root}`.\n\n{self._source_status()}"
+            "Assistant",
+            f"{'Opened' if existed else 'Created'} working folder: `{self.workspace.root}`.\n\n"
+            f"`inputs/` holds your local sources; `output/` holds the final document.\n\n"
+            f"{self._source_status()}",
         )
         if self.pending_imports:
             pending = self.pending_imports
@@ -425,9 +441,9 @@ class ReadingApp(App):
             self.query_one("#workspace-path", Static).update(Text(
                 f"Suggested folder: {self.suggested_root}", style="#aab8c7"
             ))
-            self.query_one("#sources-bar", Static).update(Text("Sources: select a working folder to continue."))
             self.query_one("#sources", Static).update(Text("No folder selected."))
             self.query_one("#tasks", Static).update(Text("No folder selected."))
+            self.query_one("#workspace-details", Collapsible).title = "Sources — choose a working folder"
             self.query_one("#workspace-choice", Horizontal).display = True
             self.query_one("#actions", Horizontal).display = False
             return
@@ -441,25 +457,8 @@ class ReadingApp(App):
         self.query_one("#sources", Static).update(Text(
             "Full source list\n" + ("\n".join(source_lines) if source_lines else "No sources yet.")
         ))
-        concise = []
-        label_width = max(18, min(100, self.size.width - 24))
-        for number, item in enumerate(sources[:2], 1):
-            if item["kind"] == "url":
-                parsed = urlsplit(item["url"])
-                label = f"{parsed.hostname} / {parsed.path.rstrip('/').split('/')[-1]}"
-            else:
-                label = item["label"]
-            concise.append(f"{number}. {label[:label_width]}")
-        if not concise:
-            concise = ["No sources yet. Paste a file path or a public URL."]
-        if len(sources) > 2:
-            concise[-1] += f"  (+{len(sources) - 2} more)"
-        self.query_one("#sources-bar", Static).update(Text(
-            f"Sources ({len(sources)})  " + concise[0]
-            + ("\n              " + concise[1] if len(concise) > 1 else "")
-        ))
         self.query_one("#workspace-details", Collapsible).title = (
-            f"Sources ({len(sources)}) and tasks — expand for full details"
+            f"Sources ({len(sources)})  |  Tasks ({len(workspace.state['todos'])})  —  click to expand"
         )
         settings = workspace.state["settings"]
         title = Text("doc harness", style="bold #bfc7d6")
@@ -640,6 +639,12 @@ class ReadingApp(App):
             self.cancel.set()
             self._log("SYSTEM", "Stop requested; waiting for the current network operation to yield.")
 
+    def action_restart(self) -> None:
+        if self.busy:
+            self._log("ERROR", "Stop the current operation before restarting.")
+            return
+        self.exit(result="restart")
+
     def action_help(self) -> None:
         self._chat_log("COMMANDS", HELP)
 
@@ -719,6 +724,9 @@ class ReadingApp(App):
         if lower in {"/quit", "/exit"}:
             self.exit()
             return
+        if lower in {"/restart", "restart", "reiniciar"}:
+            self.action_restart()
+            return
         if lower.startswith(("/new ", "/open ")):
             command, _, folder = value.partition(" ")
             self._select_workspace(folder, create=command.lower() == "/new")
@@ -782,6 +790,9 @@ class ReadingApp(App):
             return
         if lower in {"start", "let's start", "lets start", "help", "begin", "comecar", "começar", "bora iniciar", "oi"}:
             self._guide()
+            return
+        if lower in {"restart", "reiniciar", "recomeçar"}:
+            self.action_restart()
             return
         result = re.match(r"^(?:add|include|pick|adicionar|incluir) (?:result|resultado) (\d+)$", lower)
         if result:
@@ -867,6 +878,8 @@ class ReadingApp(App):
             self._chat_log("ADVANCED COMMANDS", ADVANCED_HELP)
         elif command in {"/quit", "/exit"}:
             self.exit()
+        elif command == "/restart":
+            self.action_restart()
         elif command == "/new":
             if not argument:
                 raise ValueError("Usage: /new PATH")
