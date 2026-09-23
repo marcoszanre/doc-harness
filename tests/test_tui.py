@@ -3,7 +3,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from textual.widgets import Button, Input, Select, Static
+from textual.containers import Vertical, VerticalScroll
+from textual.widgets import Button, Collapsible, Input, Select, Static
 
 from doc_harness.foundry import Completion
 from doc_harness.tui import ComposerSuggester, ReadingApp
@@ -32,8 +33,44 @@ class TuiTests(unittest.IsolatedAsyncioTestCase):
                         self.assertLessEqual(composer.region.bottom, app.size.height - 1)
                         self.assertGreaterEqual(composer.region.width, app.size.width - 4)
                         self.assertIs(app.focused, composer)
+                        self.assertLessEqual(app.query_one("#thread", Vertical).region.width, 112)
+                        self.assertTrue(app.query_one("#workspace-details", Collapsible).collapsed)
                         await pilot.press("a")
                         self.assertEqual(composer.value, "a")
+
+    async def test_long_conversation_scrolls_and_renders_markdown(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = ReadingApp(Path(directory) / "weekly")
+            async with app.run_test(size=(100, 26)) as pilot:
+                await pilot.pause()
+                app._chat_log("Assistant", "**Bold** answer with a useful [link](https://example.org).")
+                await pilot.pause()
+                screenshot = app.export_screenshot()
+                self.assertIn("Bold", screenshot)
+                self.assertNotIn("**Bold**", screenshot)
+                for number in range(30):
+                    app._chat_log("Assistant", f"Message {number} with an explanation.")
+                await pilot.pause()
+                timeline = app.query_one("#timeline", VerticalScroll)
+                self.assertGreater(timeline.max_scroll_y, 0)
+                self.assertGreater(timeline.scroll_y, 0)
+                self.assertGreaterEqual(app.query_one("#composer", Input).region.y, 1)
+
+    async def test_source_question_reads_workspace_not_model_guess(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = ReadingApp(Path(directory) / "weekly")
+            (app.workspace.inputs / "article.pdf").write_bytes(b"local test file")
+            app.workspace.add_url("https://example.org/post")
+            with patch("doc_harness.tui.Foundry", side_effect=AssertionError("Do not call model for source inventory")):
+                async with app.run_test(size=(100, 32)) as pilot:
+                    await pilot.pause()
+                    composer = app.query_one("#composer", Input)
+                    composer.value = "quais sources estao configurados?"
+                    await pilot.press("enter")
+                    self.assertFalse(app.busy)
+                    self.assertIn("article.pdf", app._source_status())
+                    self.assertIn("https://example.org/post", app._source_status())
+                    self.assertIn("2 sources", str(app.query_one("#settings", Static).render()))
 
     async def test_autocomplete_commands_and_local_paths(self):
         with tempfile.TemporaryDirectory() as directory:

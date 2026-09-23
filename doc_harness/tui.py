@@ -10,13 +10,14 @@ from urllib.parse import urlsplit
 
 from azure.core.exceptions import AzureError
 from openai import OpenAIError
+from rich.markdown import Markdown as RichMarkdown
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.suggester import Suggester
-from textual.widgets import Button, Footer, Header, Input, ProgressBar, RichLog, Select, Static
+from textual.widgets import Button, Collapsible, Input, ProgressBar, Select, Static
 
 from .chat import chat
 from .exporters import export
@@ -99,31 +100,33 @@ class ComposerInput(Input):
 
 
 class ReadingApp(App):
-    TITLE = "DOC HARNESS"
-    SUB_TITLE = "From everything you read to one useful document"
+    TITLE = "Doc Harness"
     CSS = """
-    Screen { background: #0a1122; color: #e5edff; }
-    Header { background: #12294e; color: #f1f6ff; }
-    Footer { background: #12294e; }
-    #body { height: 1fr; min-height: 0; overflow: hidden; }
-    #shell { height: 1fr; min-height: 0; overflow: hidden; }
-    #workspace-panel { width: 34%; min-width: 30; height: 100%; border: round #3971bc; background: #101d35; padding: 1 2; }
-    #main-panel { width: 1fr; height: 100%; padding: 0 1; overflow: hidden; }
-    .label { color: #77aef8; text-style: bold; margin-top: 1; }
-    .info { color: #e4eeff; }
-    #sources { height: 1fr; overflow-y: auto; }
-    #tasks { height: 9; overflow-y: auto; }
-    #activity { height: 1fr; min-height: 4; border: round #3971bc; background: #101d35; padding: 0 1; }
-    #thinking { height: 1fr; min-height: 4; border: round #725da8; background: #161b36; padding: 0 1; overflow-y: auto; }
-    #live-answer { height: 1fr; min-height: 4; border: round #3971bc; background: #101d35; padding: 0 1; overflow-y: auto; }
-    #conversation { height: 2fr; min-height: 5; border: round #3971bc; background: #101d35; padding: 0 1; }
-    #actions { height: 3; padding: 0 1; background: #101d35; }
-    #actions Button { width: 12; margin-right: 1; }
-    #format-picker { width: 19; margin-right: 1; }
-    #composer-row { height: 3; padding: 0 1; background: #101d35; }
-    #composer { width: 100%; background: #182945; border: round #4d91ee; color: #ffffff; }
-    #stop { background: #8e3a55; color: #ffffff; }
-    #progress { height: 1; margin: 1 0; }
+    Screen { background: #0d1016; color: #dce2ec; }
+    #body { height: 1fr; min-height: 0; }
+    #settings { height: 2; padding: 0 2; background: #171d27; color: #aebbd0; }
+    #progress { height: 1; display: none; }
+    #timeline { height: 1fr; background: #0d1016; scrollbar-size: 1 1; align-horizontal: center; }
+    #thread { width: 100%; max-width: 112; height: auto; padding: 1 3; }
+    #workspace-details { height: auto; margin-bottom: 2; background: #151a23; color: #abb9ca; }
+    #sources, #tasks { height: auto; padding: 0 2; }
+    .role { height: auto; color: #91a5c6; text-style: bold; margin: 1 0 0 0; }
+    .role-user { color: #bca5ed; }
+    .message { height: auto; padding: 0 1; margin: 0 0 1 0; color: #e2e6ee; }
+    .message-user { background: #171b26; padding: 1 2; }
+    .event { height: auto; padding: 0 1; margin: 0 0 1 0; color: #a4afc1; }
+    .event-error { color: #f4a9a6; }
+    .event-done { color: #a6d9bd; }
+    .model-notes { height: auto; margin: 0 0 1 0; background: #151821; color: #abb0c6; }
+    .model-notes Static { height: auto; max-height: 18; overflow-y: auto; padding: 0 1; }
+    #actions { height: 3; padding: 0 2; background: #111720; }
+    #actions Button { width: 11; margin-right: 1; background: #222b39; color: #ccd5e3; border: none; }
+    #actions Button:focus { background: #344667; }
+    #format-picker { width: 16; margin-right: 1; }
+    #composer-row { height: 3; padding: 0 2; background: #111720; }
+    #composer { width: 100%; background: #1a2230; border: solid #465772; color: #ffffff; }
+    #stop { color: #e6a7a8; }
+    #hint { height: 1; padding: 0 2; color: #8997aa; background: #111720; }
     """
     BINDINGS = [
         Binding("ctrl+x", "interrupt", "Stop", priority=True),
@@ -140,54 +143,54 @@ class ReadingApp(App):
         self.reasoning = ""
         self.answer = ""
         self.active_kind = ""
+        self._live_answer: Static | None = None
+        self._model_notes: Static | None = None
+        self._notes_panel: Collapsible | None = None
+        self._render_pending = False
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
         with Vertical(id="body"):
-            with Horizontal(id="shell"):
-                with Vertical(id="workspace-panel"):
-                    yield Static("WORKSPACE", classes="label")
-                    yield Static(id="location", classes="info")
-                    yield Static("INPUTS  /  SOURCES", classes="label")
-                    yield Static(id="sources")
-                    yield Static("OUTPUT  /  SETTINGS", classes="label")
-                    yield Static(id="settings", classes="info")
-                    yield Static("TASK MANAGER", classes="label")
-                    yield Static(id="tasks")
-                with Vertical(id="main-panel"):
-                    yield Static("PROCESS  /  EVENTS", classes="label")
-                    yield ProgressBar(total=4, show_eta=False, id="progress")
-                    yield RichLog(highlight=False, markup=False, wrap=True, id="activity")
-                    yield Static("MODEL SIGNAL  /  UNVERIFIED REASONING", classes="label")
-                    yield Static("Waiting for a model response.", id="thinking")
-                    yield Static("LIVE RESPONSE", classes="label")
-                    yield Static("Waiting for model output.", id="live-answer")
-                    yield Static("CONVERSATION  /  DRAFT PREVIEW", classes="label")
-                    yield RichLog(highlight=False, markup=False, wrap=True, id="conversation")
+            yield Static(id="settings")
+            yield ProgressBar(total=4, show_eta=False, id="progress")
+            with VerticalScroll(id="timeline"):
+                with Vertical(id="thread"):
+                    with Collapsible(title="Sources and tasks", collapsed=True, id="workspace-details"):
+                        yield Static(id="sources")
+                        yield Static(id="tasks")
             with Horizontal(id="actions"):
                 yield Select(
-                    [("MARKDOWN", "markdown"), ("PDF", "pdf"), ("WORD", "docx")],
+                    [("Markdown", "markdown"), ("PDF", "pdf"), ("Word", "docx")],
                     value=self.workspace.state["settings"]["format"],
                     allow_blank=False,
                     id="format-picker",
                 )
-                yield Button("BUILD", id="build")
-                yield Button("PREVIEW", id="preview", disabled=True)
-                yield Button("EXPORT", id="approve", disabled=True)
-                yield Button("STOP", id="stop", disabled=True)
+                yield Button("Build", id="build")
+                yield Button("Preview", id="preview", disabled=True)
+                yield Button("Export", id="approve", disabled=True)
+                yield Button("Stop", id="stop", disabled=True)
             with Horizontal(id="composer-row"):
                 yield ComposerInput(
-                    placeholder="Paste a file path or URL and press Enter; / offers commands; other text is chat",
+                    placeholder="Ask a question, or paste a file path or URL...",
                     suggester=ComposerSuggester(),
                     id="composer",
                 )
-        yield Footer()
+            yield Static("Enter send  |  Tab complete  |  Ctrl+X stop  |  Ctrl+Q quit  |  F1 help", id="hint")
 
     def on_mount(self) -> None:
         self.refresh_panels()
-        self._log("SYSTEM", "Paste a file path or URL and press Enter. Then use BUILD, PREVIEW and EXPORT.")
         self._guide()
         self.query_one("#composer", Input).focus()
+
+    def _source_status(self) -> str:
+        sources = self.workspace.sources()
+        if not sources:
+            return "There are no sources in this workspace yet. Paste a file path or public URL to add one."
+        entries = [
+            f"{number}. **{'Local file' if item['kind'] == 'file' else 'Web link'}:** "
+            f"{item['label']}"
+            for number, item in enumerate(sources, 1)
+        ]
+        return f"**{len(sources)} sources configured** in `{self.workspace.root.name}`:\n\n" + "\n".join(entries)
 
     def _guide(self) -> None:
         count = len(self.workspace.sources())
@@ -198,9 +201,9 @@ class ReadingApp(App):
             )
         elif not count:
             message = (
-                f"Let's start. Your workspace is {self.workspace.root}. "
-                "Paste the path to a file or a public article URL below and press Enter. "
-                "To use another folder, say 'use folder C:\\path\\to\\my-reading'."
+                f"Let's start. I created a working folder named **{self.workspace.root.name}**. "
+                "Paste a file path or public article URL to add your first source. "
+                "Prefer a different folder? Say `use folder C:\\path\\to\\my-reading`."
             )
         elif self.workspace.state.get("pending"):
             message = (
@@ -218,6 +221,9 @@ class ReadingApp(App):
         item = raw.strip().strip('"').strip("'")
         parsed = urlsplit(item)
         if parsed.scheme in {"http", "https"} and parsed.netloc:
+            if item in self.workspace.state["sources"]:
+                self._chat_log("Assistant", "That link is already in your workspace.\n\n" + self._source_status())
+                return
             self.workspace.add_url(item)
             description = "link"
         elif (
@@ -230,38 +236,56 @@ class ReadingApp(App):
         else:
             raise ValueError("Paste a local .pdf/.docx/.md/.txt/.html file path or a public http(s) URL.")
         self._log("SYSTEM", f"Added {description}: {item}")
-        self._chat_log("GUIDE", (
-            f"Added that {description}. Add another source the same way, or say "
-            "'make a PDF' / 'make a Word document' when you're ready."
-        ))
+        self._chat_log("Assistant", f"Added the {description}. {self._source_status()}\n\n"
+                       "You can add another, or say **make a PDF** when ready.")
+
+    def _scroll_if_at_end(self) -> None:
+        timeline = self.query_one("#timeline", VerticalScroll)
+        if timeline.is_vertical_scroll_end or timeline.max_scroll_y == 0:
+            timeline.anchor()
 
     def _log(self, label: str, message: str) -> None:
-        self.query_one("#activity", RichLog).write(Text(f"{label:>9}  {message}", style={
-            "ERROR": "bold red", "STEP": "cyan", "SYSTEM": "green", "DONE": "bold green",
-        }.get(label, "white")))
+        style = {"ERROR": "red", "STEP": "dim", "SYSTEM": "cyan", "DONE": "green"}.get(label, "dim")
+        marker = "!" if label == "ERROR" else "-" if label == "STEP" else "+"
+        self._scroll_if_at_end()
+        self.query_one("#thread", Vertical).mount(
+            Static(Text(f"{marker} {message}", style=style),
+                   classes="event" + (" event-error" if label == "ERROR" else " event-done" if label == "DONE" else "")),
+        )
 
-    def _chat_log(self, label: str, message: str) -> None:
-        self.query_one("#conversation", RichLog).write(Text(f"{label}\n{message}\n", style="white"))
+    def _chat_log(self, label: str, message: str) -> Static:
+        user = label == "YOU"
+        body = Static(RichMarkdown(message), classes="message" + (" message-user" if user else ""))
+        self._scroll_if_at_end()
+        self.query_one("#thread", Vertical).mount(
+            Static(Text("You" if user else label.title()), classes="role" + (" role-user" if user else "")),
+            body,
+        )
+        return body
 
     def refresh_panels(self) -> None:
         workspace = self.workspace
-        self.query_one("#location", Static).update(Text(str(workspace.root)))
         sources = workspace.sources()
-        source_lines = [f"{n:>2}. [{item['kind']}] {item['label']}" for n, item in enumerate(sources, 1)]
-        self.query_one("#sources", Static).update(Text("\n".join(source_lines) if source_lines else "Drop files into inputs/ or use /add-url."))
-        settings = workspace.state["settings"]
-        self.query_one("#settings", Static).update(Text(
-            f"Format: {settings['format'].upper()}\nSummary: ~{settings['target_words']} words"
-            f"\nFile limit: {settings['max_file_kb'] or 'off'} KB\n"
-            f"Output: {workspace.output}\nStage: {workspace.state['stage']}"
+        source_lines = [f"{n}. {item['label']}" for n, item in enumerate(sources, 1)]
+        self.query_one("#sources", Static).update(Text(
+            "Sources\n" + ("\n".join(source_lines) if source_lines else "No sources yet.")
         ))
+        settings = workspace.state["settings"]
+        title = Text("doc harness", style="bold #b4a3eb")
+        title.append(
+            f"   {workspace.root.name}  /  {len(sources)} sources  /  "
+            f"{settings['format'].upper()}  /  {workspace.state['stage']}",
+            style="#acb8c9",
+        )
+        self.query_one("#settings", Static).update(title)
         picker = self.query_one("#format-picker", Select)
         if picker.value != settings["format"]:
             picker.value = settings["format"]
         todos = workspace.state["todos"]
         self.query_one("#tasks", Static).update(Text(
-            "\n".join(f"{i}. {'[x]' if task['done'] else '[ ]'} {task['title']}" for i, task in enumerate(todos, 1))
-            if todos else "No tasks yet. Use /todo TITLE."
+            "Tasks\n" + ("\n".join(
+                f"{i}. {'[x]' if task['done'] else '[ ]'} {task['title']}" for i, task in enumerate(todos, 1)
+            ) if todos else "No tasks yet.")
         ))
         self.query_one("#build", Button).disabled = self.busy
         self.query_one("#preview", Button).disabled = self.busy or not workspace.state.get("pending")
@@ -274,11 +298,24 @@ class ReadingApp(App):
     def _event(self, kind: str, text: str) -> None:
         if kind == "reasoning":
             self.reasoning = (self.reasoning + text)[-6000:]
-            self.query_one("#thinking", Static).update(Text(self.reasoning))
+            if self._model_notes is None:
+                self._model_notes = Static(Text(self.reasoning))
+                self._notes_panel = Collapsible(
+                    self._model_notes, title="Model signal (unverified)", collapsed=True,
+                    classes="model-notes",
+                )
+                self.query_one("#thread", Vertical).mount(self._notes_panel)
+            self._model_notes.update(Text(self.reasoning))
         elif kind == "answer":
-            self.answer = (self.answer + text)[-12000:]
-            self.query_one("#live-answer", Static).update(Text(self.answer))
+            self.answer += text
+            if self._live_answer and not self._render_pending:
+                self._render_pending = True
+                self.set_timer(0.05, self._flush_answer)
         else:
+            if text.startswith("Writing and reviewing introduction"):
+                self.answer = ""
+                if self._live_answer:
+                    self._live_answer.update(RichMarkdown("_Writing the edition summary..._"))
             self._log("ERROR" if kind == "error" else "STEP", text)
             progress = self.query_one("#progress", ProgressBar)
             if "Indexing" in text:
@@ -287,6 +324,12 @@ class ReadingApp(App):
                 progress.update(progress=2)
             elif "Quality gate" in text:
                 progress.update(progress=3)
+
+    def _flush_answer(self) -> None:
+        self._render_pending = False
+        if self._live_answer and self.answer:
+            self._scroll_if_at_end()
+            self._live_answer.update(RichMarkdown(self.answer))
 
     def _start(self, kind: str, payload: str = "") -> None:
         if self.busy:
@@ -297,21 +340,30 @@ class ReadingApp(App):
         self.cancel = Event()
         self.reasoning = ""
         self.answer = ""
-        self.query_one("#thinking", Static).update("Waiting for model output...")
-        self.query_one("#live-answer", Static).update("Waiting for model output...")
+        self._render_pending = False
+        self._model_notes = None
+        self._notes_panel = None
+        self._live_answer = (
+            self._chat_log("Assistant", "_Working..._")
+            if kind in {"build", "refresh", "chat", "revise"} else None
+        )
         self.query_one("#composer", Input).disabled = True
         self.query_one("#stop", Button).disabled = False
-        self.query_one("#progress", ProgressBar).update(progress=0)
+        progress = self.query_one("#progress", ProgressBar)
+        progress.display = kind in {"build", "refresh", "export"}
+        progress.update(progress=0)
         self.refresh_panels()
         self._run_operation(kind, payload)
 
     def _finished(self, message: str, failed: bool = False) -> None:
         self.busy = False
+        self._flush_answer()
         self.query_one("#composer", Input).disabled = False
         self.query_one("#stop", Button).disabled = True
         self.query_one("#composer", Input).focus()
-        if self.answer and not failed:
-            self._chat_log("MODEL RESPONSE", self.answer[-8000:])
+        self.query_one("#progress", ProgressBar).display = False
+        if self._live_answer and not self.answer:
+            self._live_answer.update(RichMarkdown("_No model response._" if failed else "_Completed._"))
         self._log("ERROR" if failed else "DONE", message)
         self.refresh_panels()
         if not failed and self.active_kind in {"build", "refresh", "export"}:
@@ -395,6 +447,7 @@ class ReadingApp(App):
         event.input.value = ""
         if not text or self.busy:
             return
+        self.query_one("#timeline", VerticalScroll).anchor()
         try:
             if text.startswith("/") and not Path(text.strip('"').strip("'")).is_file():
                 command, _, argument = text.partition(" ")
@@ -444,6 +497,16 @@ class ReadingApp(App):
             return
         if lower in {"show skills", "list skills", "mostrar skills"}:
             self._command("/skills", "")
+            return
+        if lower in {"sources", "fontes", "files", "arquivos"} or (
+            re.search(r"\b(?:sources?|fontes?|arquivos?|files?|links?)\b", lower)
+            and re.search(
+                r"\b(?:quais|qual|which|what|list|liste|listar|show|mostrar|"
+                r"configured|configurad\w*|adicionad\w*|have|tenho)\b",
+                lower,
+            )
+        ):
+            self._chat_log("Assistant", self._source_status())
             return
         skill = re.match(r"^(?:use|usar)\s+skill\s+(.+)$", value, flags=re.I)
         if skill:
@@ -569,7 +632,12 @@ class ReadingApp(App):
         elif command == "/skill":
             self._run_skill(argument)
         elif command == "/status":
-            self._log("SYSTEM", f"Stage: {workspace.state['stage']} | Latest: {workspace.state.get('last_output', 'none')}")
+            self._chat_log(
+                "Assistant",
+                self._source_status() + f"\n\nStage: {workspace.state['stage']}."
+                f"\nWorkspace: `{workspace.root}`."
+                f"\nLatest output: `{workspace.state.get('last_output', 'none')}`.",
+            )
         elif command == "/cancel":
             self.action_interrupt()
         else:

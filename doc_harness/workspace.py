@@ -91,7 +91,14 @@ class Workspace:
         target = self.inputs / path.name
         if target.resolve() != path:
             if target.exists():
-                raise FileExistsError(f"An input named {target.name} already exists.")
+                if target.stat().st_size == path.stat().st_size and (
+                    hashlib.sha256(target.read_bytes()).digest()
+                    == hashlib.sha256(path.read_bytes()).digest()
+                ):
+                    return target
+                raise FileExistsError(
+                    f"An input named {target.name} already exists with different content."
+                )
             shutil.copyfile(path, target)
         self.invalidate()
         self.save()

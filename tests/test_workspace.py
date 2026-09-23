@@ -37,3 +37,10 @@ class WorkspaceTests(unittest.TestCase):
         self.assertNotIn("pending", self.workspace.state)
         with self.assertRaises(ValueError):
             self.workspace.set_max_file_kb(2)
+
+    def test_readding_the_same_file_does_not_fail_or_duplicate(self):
+        source = self.root / "source.md"
+        source.write_text("A complete source.", encoding="utf-8")
+        self.workspace.add_file(source)
+        self.workspace.add_file(source)
+        self.assertEqual(len(self.workspace.sources()), 1)

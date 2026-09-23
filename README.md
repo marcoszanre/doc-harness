@@ -12,12 +12,13 @@ are no templates, browser automation, Google integration, or agent tool loop.
 The only model/provider is **DeepSeek-V4-Pro on Azure Foundry**.
 
 The full-screen Textual interface runs in the terminal's interactive/raw mode;
-it is not a cooked `input()` prompt. The full-width composer accepts **pasted
-file paths, URLs, or ordinary requests**. A short conversation guides new users
-through the workflow; buttons cover the common actions. The UI also shows
-sources, tasks, progress, a streamed response, and model-provided reasoning
-*when available*. The composer locks during generation; **Ctrl+X** or **STOP**
-requests an interruption.
+it is not a cooked `input()` prompt. It focuses on **one scrolling conversation
+column** with rendered Markdown and compact, unobtrusive progress lines.
+Sources and tasks are collapsible rather than occupying a permanent sidebar;
+model-provided reasoning, *when available*, is collapsed beneath the answer.
+The full-width composer accepts pasted file paths, URLs, or ordinary requests.
+Buttons cover common actions; the composer locks during generation and
+**Ctrl+X** or **Stop** requests an interruption.
 
 ## Get started
 
@@ -55,6 +56,13 @@ working folders, or "change the summary to focus on..." to revise the draft.
 To find additional links, say "find articles about ...", then "add result 1".
 The suggestion in the composer completes slash commands and local paths with
 **Tab** or **Right Arrow**; commands are optional.
+
+Ask **"which sources are configured?"** (or **"quais sources estão
+configurados?"**) to see the actual files and URLs in the active workspace.
+This inventory is read directly from the folder, not guessed by the model.
+Open **Sources and tasks** at the top of the transcript to inspect them
+without leaving the conversation. Use the mouse wheel or Page Up/Page Down
+to scroll; incoming output follows the bottom until you scroll up to read.
 
 The approved file appears in your folder's `output/` directory. Its summary,
 navigation, full article texts, and source references are all in that **one

@@ -9,12 +9,14 @@ from .workspace import Workspace
 
 def chat(workspace: Workspace, model: Foundry, prompt: str, emit, cancel: Event) -> str:
     history = workspace.state["chat"][-12:]
-    source_count = len(workspace.sources())
+    source_names = [f"{item['kind']}: {item['label']}" for item in workspace.sources()]
     stage = workspace.state["stage"]
     messages = [
         {"role": "system", "content": (
             "You are a concise conversational guide for a reading collection. "
-            f"Current workspace: {workspace.root}. Sources: {source_count}. Stage: {stage}. "
+            f"Current workspace: {workspace.root}. Source list (authoritative): "
+            f"{source_names or 'none'}. Stage: {stage}. "
+            "Use the actual source list; never say that the workspace is empty when it is not. "
             "If an operation needs to happen, explain the next simple action; never claim "
             "to have fetched, read, exported, or changed something you did not do. "
             "Answer in the user's language. Do not overwhelm novices with slash commands. "
